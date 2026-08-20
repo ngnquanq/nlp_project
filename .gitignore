@@ -1,0 +1,49 @@
+# Local environments and tool caches
+.conda/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/__pycache__/
+*.py[cod]
+.DS_Store
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+credentials*
+kaggle.json
+
+# Restricted course data and private packaging
+zh-vi/
+en-vi/
+artifacts/
+PROJECT_SPECIFICATION_v1.3.docx
+2021.icon-main.4.pdf
+
+# Generated experiment state. Keep the directory contracts documented.
+checkpoint/*
+!checkpoint/README.md
+predictions/*
+!predictions/README.md
+metrics/*
+!metrics/README.md
+work/
+runs/
+error_analysis/manual_sample.csv
+error_analysis/manual_sample.jsonl
+error_analysis/summary.json
+
+# Large model/training formats and generated submission documents
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.idx
+*.zip
+report.pdf
+slides.pdf

@@ -1,0 +1,58 @@
+experiment_id: e1_fairseq_vi_zh_v1
+backend: fairseq
+dataset_config: configs/dataset.yaml
+seed: 42
+work_dir: work/e1_fairseq_vi_zh_v1
+checkpoint_dir: checkpoint/e1_fairseq_vi_zh_v1
+prediction_dir: predictions
+
+preprocess:
+  source_lang: vi
+  target_lang: zh
+  threshold_source: 1
+  threshold_target: 1
+  workers: 4
+
+model:
+  architecture: transformer
+  encoder_layers: 6
+  decoder_layers: 6
+  encoder_embed_dim: 512
+  decoder_embed_dim: 512
+  encoder_ffn_embed_dim: 2048
+  decoder_ffn_embed_dim: 2048
+  encoder_attention_heads: 8
+  decoder_attention_heads: 8
+  dropout: 0.1
+  share_decoder_input_output_embed: true
+
+training:
+  cpu: false
+  num_workers: 4
+  optimizer: adam
+  adam_betas: "(0.9, 0.998)"
+  learning_rate: 0.0005
+  scheduler: inverse_sqrt
+  warmup_updates: 8000
+  label_smoothing: 0.1
+  weight_decay: 0.0
+  clip_norm: 0.0
+  max_tokens_per_gpu: 1000
+  update_freq: 4
+  distributed_world_size: 1
+  max_update: 50000
+  max_epoch: 500
+  patience: 20
+  fp16: true
+  max_source_positions: 256
+  max_target_positions: 256
+  save_interval: 1
+  keep_best_checkpoints: 1
+  no_epoch_checkpoints: true
+
+decoding:
+  beam: 7
+  lenpen: 1.0
+  max_len_a: 1.2
+  max_len_b: 10
+  batch_size: 64

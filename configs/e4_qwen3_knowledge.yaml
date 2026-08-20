@@ -1,0 +1,82 @@
+experiment_id: e4_qwen3_knowledge_vi_zh_v1
+backend: qlora_knowledge
+dataset_config: configs/dataset.yaml
+seed: 42
+work_dir: work/e4_qwen3_knowledge_vi_zh_v1
+checkpoint_dir: checkpoint/e4_qwen3_knowledge_vi_zh_v1
+prediction_dir: predictions
+
+# Model, quantization, LoRA and training blocks are copied from
+# configs/e2_qwen3_qlora.yaml so that E4 vs E2 isolates the knowledge hints.
+# The controlled axis is epochs (3): both models see every training pair the same
+# number of times. E4 necessarily processes more tokens and takes more optimizer
+# updates, because its inputs are longer; that is a cost of the method, not a
+# hidden confound, and both figures are reported alongside the scores.
+
+model:
+  name: Qwen/Qwen3-8B
+  # Pinned to the revision E2 actually resolved, so E4 is not silently trained
+  # against a different base model than the system it is compared with.
+  revision: b968826d9c46dd6066d109eabc6255188de91218  # pragma: allowlist secret
+  max_sequence_length: 768
+  trust_remote_code: false
+  enable_thinking: false
+
+knowledge:
+  file: zh-vi/knowledge.json
+  # Set from `make knowledge-preflight`, not by intuition: 64 candidates add ~163
+  # Qwen tokens to a ~25-token source (2.52x E2's total tokens, ~14 h).
+  max_candidates: 16
+  hint_prefix: "Gợi ý chữ Hán:"
+
+prompt:
+  system: Bạn là hệ thống dịch văn bản lịch sử. Hãy dịch câu tiếng Việt sang Hán văn cổ. Chỉ trả về bản dịch Hán văn, không giải thích.
+  user_template: "Dịch sang Hán văn cổ:\n{source}"
+
+quantization:
+  load_in_4bit: true
+  quant_type: nf4
+  double_quant: true
+  compute_dtype: float16
+
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.0
+  bias: none
+  target_modules: all-linear
+
+training:
+  epochs: 3
+  per_device_batch_size: 1
+  # NOT E2's 16. E2 packed 19,218 examples into 2,903 sequences, so its 16-sequence
+  # accumulation covered ~106 examples per update and took 546 updates over 3 epochs
+  # (confirmed by its trainer checkpoint-546). E4 does not pack, so 16 would mean 16
+  # examples per update and 3,606 updates — a ~7x smaller effective batch, the same
+  # defect that confounded E1 vs E3. 106 restores both: 546 updates, 106 examples each.
+  gradient_accumulation_steps: 106
+  learning_rate: 0.0002
+  scheduler: cosine
+  # 0.05 of 546 steps = 27 warmup steps, same as E2. Note this holds *step* count
+  # fixed, not tokens per step: E4 processes ~5,441 tokens per update against E2's
+  # ~3,775 (1.44x), because hints make every input longer. So the realised LR schedule
+  # differs in tokens even though it matches in steps. This is the third documented
+  # difference from E2, alongside prompt content and packing.
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  logging_steps: 10
+  # E2 evaluated only twice over its 546 steps, so "best validation loss" rested on
+  # two points. Same step budget here, evaluated 10x more often.
+  eval_steps: 50
+  save_steps: 50
+  save_total_limit: 3
+  gradient_checkpointing: true
+  fp16: true
+  bf16: false
+  # Deliberate deviation from E2. Packing concatenates examples into one 768-token
+  # window with no attention reset, so a sequence could attend to a neighbouring
+  # example's Han-character hints while generating its own translation. That would
+  # teach the model to ignore the hints and produce a null result that looks like
+  # "knowledge does not help".
+  pack_examples: false

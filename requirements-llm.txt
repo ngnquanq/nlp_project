@@ -1,0 +1,11 @@
+# Install in a separate CUDA environment and freeze the resolved versions per run.
+accelerate>=1.7,<2
+bitsandbytes>=0.45,<1
+datasets>=3.6,<5
+peft>=0.15,<1
+PyYAML==6.0.2
+sacrebleu==2.6.0
+transformers>=4.51,<5
+trl>=0.17,<1
+pytest==8.4.1
+

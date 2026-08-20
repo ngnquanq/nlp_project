@@ -1,0 +1,57 @@
+experiment_id: smoke_fairseq_vi_zh
+backend: fairseq
+dataset_config: configs/dataset.yaml
+seed: 42
+work_dir: work/smoke_fairseq_vi_zh
+checkpoint_dir: checkpoint/smoke_fairseq_vi_zh
+prediction_dir: predictions
+
+preprocess:
+  source_lang: vi
+  target_lang: zh
+  threshold_source: 1
+  threshold_target: 1
+  workers: 2
+
+model:
+  architecture: transformer
+  encoder_layers: 2
+  decoder_layers: 2
+  encoder_embed_dim: 64
+  decoder_embed_dim: 64
+  encoder_ffn_embed_dim: 128
+  decoder_ffn_embed_dim: 128
+  encoder_attention_heads: 2
+  decoder_attention_heads: 2
+  dropout: 0.1
+  share_decoder_input_output_embed: true
+
+training:
+  cpu: true
+  num_workers: 0
+  optimizer: adam
+  adam_betas: "(0.9, 0.998)"
+  learning_rate: 0.0005
+  scheduler: inverse_sqrt
+  warmup_updates: 1
+  label_smoothing: 0.1
+  weight_decay: 0.0
+  clip_norm: 0.0
+  max_tokens_per_gpu: 256
+  update_freq: 1
+  distributed_world_size: 1
+  max_update: 2
+  max_epoch: 1
+  patience: 1
+  fp16: false
+  max_source_positions: 256
+  max_target_positions: 256
+  save_interval: 1
+  keep_best_checkpoints: 1
+
+decoding:
+  beam: 2
+  lenpen: 1.0
+  max_len_a: 1.2
+  max_len_b: 10
+  batch_size: 1

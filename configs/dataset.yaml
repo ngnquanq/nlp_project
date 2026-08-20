@@ -1,0 +1,22 @@
+dataset_id: dvsktt_vi_zh_v1
+description: Đại Việt sử ký toàn thư Vietnamese to Classical Chinese core corpus
+source_language: vi
+target_language: zh
+splits:
+  train:
+    source: zh-vi/train/DVSKTT_self_aligned_cn_sv_vi_20240927_cleaned_official.no_punct.line.train.vi
+    target: zh-vi/train/DVSKTT_self_aligned_cn_sv_vi_20240927_cleaned_official.no_punct.line.train.cn
+    quality: core_silver_self_aligned
+    expected_lines: 19218
+  val:
+    source: zh-vi/val/DVSKTT_manually_aligned_sent_cleaned_gold_eval.20240829.no_punct.val.vi
+    target: zh-vi/val/DVSKTT_manually_aligned_sent_cleaned_gold_eval.20240829.no_punct.val.cn
+    quality: core_gold_manual
+    expected_lines: 510
+  test:
+    source: zh-vi/test/DVSKTT_manually_aligned_sent_cleaned_gold_eval.20240829.no_punct.test.vi
+    target: zh-vi/test/DVSKTT_manually_aligned_sent_cleaned_gold_eval.20240829.no_punct.test.cn
+    quality: core_gold_manual
+    expected_lines: 510
+knowledge: zh-vi/knowledge.json
+

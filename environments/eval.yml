@@ -1,0 +1,11 @@
+name: group10-eval
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pyyaml=6.0.2
+  - pytest=8.4.1
+  - pip:
+      - sacrebleu==2.6.0
+

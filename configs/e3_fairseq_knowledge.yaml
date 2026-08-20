@@ -1,0 +1,14 @@
+experiment_id: e3_fairseq_knowledge_vi_zh_v1
+backend: knowledge_v2
+status: blocked
+blocked_reason: Official knowledge_v2 integration code and configuration are not present in the supplied repository.
+dataset_config: configs/dataset.yaml
+base_experiment_config: configs/e1_fairseq.yaml
+knowledge_file: zh-vi/knowledge.json
+required_gate:
+  - E1 and E2 completed with verified artifacts
+  - Official code obtained from instructor/lab
+  - Vietnamese-to-Chinese direction confirmed
+  - No validation or test reference access during training
+  - Same E1 seed, architecture, training budget, and decoding configuration
+

@@ -1,0 +1,56 @@
+experiment_id: e2_qwen3_8b_qlora_vi_zh_v1
+backend: qlora
+dataset_config: configs/dataset.yaml
+seed: 42
+work_dir: work/e2_qwen3_8b_qlora_vi_zh_v1
+checkpoint_dir: checkpoint/e2_qwen3_8b_qlora_vi_zh_v1
+prediction_dir: predictions
+
+model:
+  name: Qwen/Qwen3-8B
+  revision: b968826d9c46dd6066d109eabc6255188de91218  # pragma: allowlist secret
+  max_sequence_length: 768
+  trust_remote_code: false
+  enable_thinking: false
+
+prompt:
+  system: Bạn là hệ thống dịch văn bản lịch sử. Hãy dịch câu tiếng Việt sang Hán văn cổ. Chỉ trả về bản dịch Hán văn, không giải thích.
+  user_template: "Dịch sang Hán văn cổ:\n{source}"
+
+quantization:
+  load_in_4bit: true
+  quant_type: nf4
+  double_quant: true
+  compute_dtype: float16
+
+lora:
+  rank: 16
+  alpha: 32
+  dropout: 0.0
+  bias: none
+  target_modules: all-linear
+
+training:
+  epochs: 3
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.0002
+  scheduler: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  logging_steps: 10
+  eval_steps: 200
+  save_steps: 200
+  save_total_limit: 3
+  gradient_checkpointing: true
+  fp16: true
+  bf16: false
+
+decoding:
+  num_beams: 4
+  do_sample: false
+  max_new_tokens_cap: 512
+  output_length_multiplier: 2
+  output_length_offset: 32
+
