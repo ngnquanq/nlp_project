@@ -127,6 +127,13 @@ audit, and `repro-check`; it needs neither model downloads nor a GPU but does ne
 the private inputs and saved artifacts. `repro-check` reports `skipped` for absent
 generated artifacts; `repro-smoke` requires a GPU.
 
+## Local translation UI
+
+The `feature/e1-mt-web-ui` branch adds a local React/FastAPI translation desk for
+the E1 model. The interface and API are safe to publish, while the private
+checkpoint and Fairseq `data-bin` remain external and are injected with environment
+variables. See [`docs/MT_UI.md`](docs/MT_UI.md) for setup and operating instructions.
+
 ## Experiment policy
 
 - E1 and E2 use only the official train split for optimization and validation for checkpoint selection.
