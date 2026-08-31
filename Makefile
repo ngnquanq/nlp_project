@@ -1,5 +1,6 @@
 .PHONY: audit test test-source test-private check check-source check-private \
         status repro-check repro-smoke derive-configs compare-e4 \
+        ui-install ui-api ui-web ui-build ui-serve ui-check ui-private-model \
         e1 e1-train e1-val e1-freeze e1-test \
         e2 e2-train e2-val e2-freeze e2-test \
         e3-custom e3-custom-train e3-custom-val e3-custom-freeze e3-custom-test \
@@ -19,6 +20,8 @@ EVAL_PYTHON ?= conda run --no-capture-output -p $(CURDIR)/.conda/eval python
 EVAL         := $(EVAL_PYTHON) -m mt_pipeline
 FAIRSEQ      := conda run --no-capture-output -p $(CURDIR)/.conda/fairseq python -m mt_pipeline
 LLM          := conda run --no-capture-output -p $(CURDIR)/.conda/llm python -m mt_pipeline
+UI_PYTHON    ?= conda run --no-capture-output -p $(CURDIR)/.conda/e1-ui python
+UI_NPM       := npm --prefix ui
 
 # RUN_ROOT empty => canonical tree. Set it to send a whole rerun into a parallel
 # tree so the graded artifacts in checkpoint/, predictions/ and metrics/ survive:
@@ -188,6 +191,31 @@ e4-test: $(E4_CONFIG)
 	                 --output $(METRICS_DIR)/$(E4_ID).test.json
 
 e4: e4-train e4-val e4-freeze e4-test
+
+# -------------------------------------------------------------- local MT UI
+
+ui-install:
+	conda env create -p $(CURDIR)/.conda/e1-ui -f environments/e1-ui-macos.yml
+	$(UI_NPM) install
+
+ui-api:
+	$(UI_PYTHON) -m mt_pipeline.serving
+
+ui-web:
+	$(UI_NPM) run dev
+
+ui-build:
+	$(UI_NPM) run build
+
+ui-serve: ui-build
+	$(UI_PYTHON) -m mt_pipeline.serving
+
+ui-check:
+	$(UI_PYTHON) -m pytest -q ui/backend_tests/test_serving.py
+	$(UI_NPM) run check
+
+ui-private-model:
+	$(UI_PYTHON) -m pytest -q ui/backend_tests/test_serving_private_model.py -m private_model
 
 # ------------------------------------------------------- comparisons + analysis
 
