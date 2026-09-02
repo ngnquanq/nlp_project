@@ -10,6 +10,8 @@ dependencies:
   - wheel
   - cython
   - numpy<2
+  # torch 1.13.1 needs iJIT_NotifyEvent, removed from MKL in 2024.0
+  - mkl<2024
   - pytorch=1.13.1
   - pytorch-cuda=11.7
   - pyyaml=6.0.2
