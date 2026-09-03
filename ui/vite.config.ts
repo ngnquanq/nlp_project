@@ -8,7 +8,9 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
+      // Follows MT_PORT so `make ui-up MT_PORT=…` keeps the dev proxy pointed
+      // at the gateway instead of silently failing against a stale port.
+      '/api': `http://127.0.0.1:${process.env.MT_PORT ?? '8000'}`,
     },
   },
   test: {

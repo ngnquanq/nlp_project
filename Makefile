@@ -1,6 +1,8 @@
 .PHONY: audit test test-source test-private check check-source check-private \
         status repro-check repro-smoke derive-configs compare-e4 \
         ui-install ui-api ui-web ui-build ui-serve ui-check ui-private-model \
+        ui-install-e2 ui-api-e2 ui-check-e2 ui-e2-model \
+        ui-up ui-up-sidecar ui-wait-sidecar ui-down ui-restart ui-status ui-logs \
         e1 e1-train e1-val e1-freeze e1-test \
         e2 e2-train e2-val e2-freeze e2-test \
         e3-custom e3-custom-train e3-custom-val e3-custom-freeze e3-custom-test \
@@ -21,6 +23,7 @@ EVAL         := $(EVAL_PYTHON) -m mt_pipeline
 FAIRSEQ      := conda run --no-capture-output -p $(CURDIR)/.conda/fairseq python -m mt_pipeline
 LLM          := conda run --no-capture-output -p $(CURDIR)/.conda/llm python -m mt_pipeline
 UI_PYTHON    ?= conda run --no-capture-output -p $(CURDIR)/.conda/e1-ui python
+UI_E2_PYTHON ?= conda run --no-capture-output -p $(CURDIR)/.conda/e2-ui python
 UI_NPM       := npm --prefix ui
 
 # RUN_ROOT empty => canonical tree. Set it to send a whole rerun into a parallel
@@ -194,6 +197,132 @@ e4: e4-train e4-val e4-freeze e4-test
 
 # -------------------------------------------------------------- local MT UI
 
+# Defaults so the UI targets run without exporting anything by hand. Every one
+# is `?=`, so an explicit environment value still wins. Set MT_E2_URL empty to
+# run E1 only:  make ui-api MT_E2_URL=
+MT_CHECKPOINT_PATH ?= $(CURDIR)/checkpoint/$(E1_ID)/checkpoint_best.pt
+MT_DATA_BIN_PATH   ?= $(CURDIR)/work/$(E1_ID)/data-bin
+MT_DEVICE          ?= cpu
+MT_PORT            ?= 8000
+MT_E2_PORT         ?= 8001
+MT_E2_DEVICE       ?= cuda
+MT_E2_URL          ?= http://127.0.0.1:$(MT_E2_PORT)
+export MT_CHECKPOINT_PATH MT_DATA_BIN_PATH MT_DEVICE MT_PORT
+export MT_E2_PORT MT_E2_DEVICE MT_E2_URL
+
+# Backgrounded services are launched through the interpreter/binary itself, not
+# `conda run` or `npm run`: those fork a child, so the PID we record would not
+# be the server we later kill. Each service below is a single process.
+UI_PYTHON_BIN    ?= $(CURDIR)/.conda/e1-ui/bin/python
+UI_E2_PYTHON_BIN ?= $(CURDIR)/.conda/e2-ui/bin/python
+UI_VITE          := $(CURDIR)/ui/node_modules/.bin/vite
+UI_RUN_DIR       := $(CURDIR)/.run
+UI_WEB_PORT      ?= 5173
+UI_LOG_LINES     ?= 40
+UI_STOP_TIMEOUT  ?= 15
+WITH_E2          ?= 1
+
+# $(1) service name, $(2) command
+define ui_start
+	@mkdir -p $(UI_RUN_DIR)
+	@if [ -s "$(UI_RUN_DIR)/$(1).pid" ] && kill -0 "$$(cat $(UI_RUN_DIR)/$(1).pid)" 2>/dev/null; then \
+	   printf '  %-8s already running (pid %s)\n' "$(1)" "$$(cat $(UI_RUN_DIR)/$(1).pid)"; \
+	 else \
+	   nohup $(2) > "$(UI_RUN_DIR)/$(1).log" 2>&1 & \
+	   echo $$! > "$(UI_RUN_DIR)/$(1).pid"; \
+	   printf '  %-8s started (pid %s)\n' "$(1)" "$$(cat $(UI_RUN_DIR)/$(1).pid)"; \
+	 fi
+endef
+
+# $(1) service name, $(2) URL, $(3) seconds, $(4) 1 = required
+define ui_wait
+	@for i in $$(seq 1 $(3)); do \
+	   if curl -sf -m 2 -o /dev/null "$(2)"; then printf '  %-8s ready\n' "$(1)"; exit 0; fi; \
+	   sleep 1; \
+	 done; \
+	 printf '  %-8s NOT ready after %ss - see %s\n' "$(1)" "$(3)" "$(UI_RUN_DIR)/$(1).log"; \
+	 [ "$(4)" = "1" ] && exit 1 || exit 0
+endef
+
+# One command for the whole desk: E1 gateway, E2 sidecar and Vite, backgrounded
+# with pidfiles under .run/. Equivalent to ui-api + ui-api-e2 + ui-web in three
+# terminals.  make ui-up WITH_E2=0   starts E1 and the browser UI only.
+ui-up:
+	@echo "Starting the local MT desk"
+	$(call ui_start,gateway,$(UI_PYTHON_BIN) -m mt_pipeline.serving)
+	@if [ "$(WITH_E2)" != "1" ]; then \
+	   printf '  %-8s disabled (WITH_E2=0)\n' sidecar; \
+	 elif [ ! -x "$(UI_E2_PYTHON_BIN)" ]; then \
+	   printf '  %-8s skipped (.conda/e2-ui missing - run: make ui-install-e2)\n' sidecar; \
+	 else $(MAKE) --no-print-directory ui-up-sidecar; fi
+	$(call ui_start,web,$(UI_VITE) ui --port $(UI_WEB_PORT))
+	@echo
+	$(call ui_wait,gateway,http://127.0.0.1:$(MT_PORT)/api/health,60,1)
+	@if [ -s "$(UI_RUN_DIR)/sidecar.pid" ]; then \
+	   $(MAKE) --no-print-directory ui-wait-sidecar; fi
+	$(call ui_wait,web,http://127.0.0.1:$(UI_WEB_PORT)/,30,1)
+	@echo
+	@echo "  open  http://127.0.0.1:$(UI_WEB_PORT)"
+	@echo "  logs  make ui-logs     stop  make ui-down     state  make ui-status"
+
+ui-up-sidecar:
+	$(call ui_start,sidecar,$(UI_E2_PYTHON_BIN) -m mt_pipeline.serving.e2_main)
+
+# The sidecar is optional: a missing GPU must not fail the whole desk.
+ui-wait-sidecar:
+	$(call ui_wait,sidecar,http://127.0.0.1:$(MT_E2_PORT)/api/health,30,0)
+
+# Waits for each process to actually exit before returning. SIGTERM returns
+# immediately, but the sidecar has ~7GB of VRAM to release, and ui-restart would
+# otherwise race it and fail to bind the port.
+ui-down:
+	@stopped=0; \
+	 for name in web sidecar gateway; do \
+	   f="$(UI_RUN_DIR)/$$name.pid"; [ -s "$$f" ] || continue; \
+	   pid=$$(cat "$$f"); \
+	   if kill -0 "$$pid" 2>/dev/null; then \
+	     kill "$$pid" 2>/dev/null; \
+	     for i in $$(seq 1 $(UI_STOP_TIMEOUT)); do \
+	       kill -0 "$$pid" 2>/dev/null || break; sleep 1; \
+	     done; \
+	     if kill -0 "$$pid" 2>/dev/null; then \
+	       kill -9 "$$pid" 2>/dev/null; \
+	       printf '  %-8s force-killed after %ss (pid %s)\n' "$$name" "$(UI_STOP_TIMEOUT)" "$$pid"; \
+	     else \
+	       printf '  %-8s stopped (pid %s)\n' "$$name" "$$pid"; \
+	     fi; \
+	     stopped=1; \
+	   fi; \
+	   rm -f "$$f"; \
+	 done; \
+	 [ "$$stopped" = "1" ] || echo "  nothing was running"
+
+ui-restart:
+	@$(MAKE) --no-print-directory ui-down
+	@$(MAKE) --no-print-directory ui-up
+
+ui-status:
+	@for name in gateway sidecar web; do \
+	   f="$(UI_RUN_DIR)/$$name.pid"; \
+	   if [ -s "$$f" ] && kill -0 "$$(cat $$f)" 2>/dev/null; then \
+	     printf '  %-8s running (pid %s)\n' "$$name" "$$(cat $$f)"; \
+	   else printf '  %-8s stopped\n' "$$name"; fi; \
+	 done
+	@echo
+	@curl -sf -m 3 http://127.0.0.1:$(MT_PORT)/api/health 2>/dev/null \
+	  | python3 -c 'import json,sys;\
+d = json.load(sys.stdin);\
+print("  health:  " + d["status"]);\
+[print("    %-3s %-12s %-5s %s" % (m["key"], m["status"], m["device"], m["model_id"])) for m in d["models"]]' \
+	  || echo "  health:  gateway unreachable on port $(MT_PORT)"
+
+ui-logs:
+	@for name in gateway sidecar web; do \
+	   f="$(UI_RUN_DIR)/$$name.log"; [ -f "$$f" ] || continue; \
+	   echo "---- $$name ----"; tail -n $(UI_LOG_LINES) "$$f"; echo; \
+	 done
+
+
 ui-install:
 	conda env create -p $(CURDIR)/.conda/e1-ui -f environments/e1-ui-macos.yml
 	$(UI_NPM) install
@@ -211,11 +340,34 @@ ui-serve: ui-build
 	$(UI_PYTHON) -m mt_pipeline.serving
 
 ui-check:
-	$(UI_PYTHON) -m pytest -q ui/backend_tests/test_serving.py
+	$(UI_PYTHON) -m pytest -q ui/backend_tests/test_serving.py \
+	  ui/backend_tests/test_serving_models.py \
+	  ui/backend_tests/test_remote_translator.py \
+	  ui/backend_tests/test_lazy_translator.py \
+	  ui/backend_tests/test_e2_translator.py
 	$(UI_NPM) run check
 
 ui-private-model:
 	$(UI_PYTHON) -m pytest -q ui/backend_tests/test_serving_private_model.py -m private_model
+
+# E1 and E2 cannot share a process: fairseq 0.12.2 needs numpy<2 while the Qwen
+# stack needs numpy 2.x. E2 therefore runs as a sidecar in its own environment,
+# cloned from .conda/llm so it keeps the exact stack that produced the adapter
+# (environments/llm.yml pins pytorch 2.5.1; the env actually holds 2.6.0+cu124).
+# The clone hardlinks from the shared package cache, so it costs little disk.
+ui-install-e2:
+	conda create -y -p $(CURDIR)/.conda/e2-ui --clone $(CURDIR)/.conda/llm
+	conda run --no-capture-output -p $(CURDIR)/.conda/e2-ui python -m pip install \
+	  fastapi==0.141.1 uvicorn==0.52.4
+
+ui-api-e2:
+	$(UI_E2_PYTHON) -m mt_pipeline.serving.e2_main
+
+ui-check-e2:
+	$(UI_E2_PYTHON) -m pytest -q ui/backend_tests/test_e2_sidecar.py
+
+ui-e2-model:
+	$(UI_E2_PYTHON) -m pytest -q ui/backend_tests/test_e2_translator_model.py -m private_e2_model
 
 # ------------------------------------------------------- comparisons + analysis
 

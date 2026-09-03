@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Protocol
+from typing import Callable, Literal, Protocol
 
 from mt_pipeline.normalize import detokenize_chinese, normalize_whitespace
 
@@ -12,6 +12,24 @@ MODEL_ID = "e1_fairseq_vi_zh_v1"
 EXPECTED_PARAMETER_COUNT = 67_652_608
 MAX_SOURCE_POSITIONS = 256
 MAX_INPUT_CHARACTERS = 4_000
+
+
+@dataclass(frozen=True)
+class InputLimits:
+    """Per-model input ceilings.
+
+    ``max_units`` is always a real number because the browser renders it
+    directly; whether a given process can actually count those units is
+    signalled separately, by passing ``count_units=None`` to :func:`prepare_for`.
+    """
+
+    max_characters: int
+    max_units: int
+    unit: Literal["position", "token"]
+    unit_label: str
+    over_limit_message: str
+    client_estimate: bool = False
+    chars_per_unit: float | None = None
 
 
 class TranslationInputError(ValueError):
@@ -23,6 +41,15 @@ class TranslationInputError(ValueError):
 
 class ModelArtifactError(RuntimeError):
     pass
+
+
+class TranslationFailure(RuntimeError):
+    """The model ran but produced nothing usable."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 @dataclass(frozen=True)
@@ -45,28 +72,58 @@ class TranslationResult:
 class Translator(Protocol):
     model_id: str
     device: str
-    parameter_count: int
+    parameter_count: int | None
 
     def translate(self, text: str) -> TranslationResult: ...
 
 
-def prepare_input(text: str) -> PreparedInput:
+def _count_e1_positions(text: str) -> int:
+    return len(text.split()) + 1  # Fairseq appends EOS.
+
+
+E1_LIMITS = InputLimits(
+    max_characters=MAX_INPUT_CHARACTERS,
+    max_units=MAX_SOURCE_POSITIONS,
+    unit="position",
+    unit_label="vị trí",
+    over_limit_message=(
+        f"E1 hỗ trợ tối đa {MAX_SOURCE_POSITIONS} vị trí mã hoá, "
+        "bao gồm token kết thúc câu."
+    ),
+)
+
+
+def prepare_for(
+    text: str,
+    limits: InputLimits,
+    count_units: Callable[[str], int] | None,
+) -> PreparedInput:
+    """Normalize and validate one request against a single model's limits.
+
+    ``count_units`` is None when this process cannot count the model's own
+    units — the gateway has no Qwen tokenizer, so it enforces the character
+    cap and leaves the authoritative token check to the process that owns
+    the model.
+    """
     normalized = normalize_whitespace(text)
     if not normalized:
         raise TranslationInputError("EMPTY_INPUT", "Hãy nhập câu tiếng Việt cần dịch.")
-    if len(normalized) > MAX_INPUT_CHARACTERS:
+    if len(normalized) > limits.max_characters:
         raise TranslationInputError(
             "INPUT_TOO_LONG",
-            f"Văn bản không được vượt quá {MAX_INPUT_CHARACTERS:,} ký tự.",
+            f"Văn bản không được vượt quá {limits.max_characters:,} ký tự.",
         )
     source_token_count = len(normalized.split())
-    encoded_position_count = source_token_count + 1  # Fairseq appends EOS.
-    if encoded_position_count > MAX_SOURCE_POSITIONS:
-        raise TranslationInputError(
-            "INPUT_TOO_LONG",
-            "E1 hỗ trợ tối đa 256 vị trí mã hoá, bao gồm token kết thúc câu.",
-        )
-    return PreparedInput(normalized, source_token_count, encoded_position_count)
+    if count_units is None:
+        return PreparedInput(normalized, source_token_count, 0)
+    unit_count = count_units(normalized)
+    if unit_count > limits.max_units:
+        raise TranslationInputError("INPUT_TOO_LONG", limits.over_limit_message)
+    return PreparedInput(normalized, source_token_count, unit_count)
+
+
+def prepare_input(text: str) -> PreparedInput:
+    return prepare_for(text, E1_LIMITS, _count_e1_positions)
 
 
 def _disable_fairseq_encoder_fastpath() -> None:

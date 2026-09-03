@@ -253,6 +253,78 @@ h2 {
   font-weight: 700;
 }
 
+/* Model selector. Buttons, not <select>: `button, textarea { font: inherit }`
+   and the :focus-visible rule above both enumerate element types, so a native
+   select would inherit neither. */
+.model-switch {
+  margin: 18px 0 14px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--hairline);
+  background: #fff;
+}
+
+.segment {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 0;
+  border-right: 1px solid var(--hairline);
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.segment:last-child {
+  border-right: 0;
+}
+
+.segment:hover:not(.is-active):not(.is-unavailable) {
+  background: var(--mineral-blue);
+}
+
+.segment.is-active {
+  color: #fff;
+  background: var(--ink-indigo);
+}
+
+.segment.is-active .segment-sub {
+  color: #c8d5d8;
+}
+
+.segment.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.segment-label {
+  font-size: 0.86rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.segment-sub {
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.model-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.model-note.is-warning {
+  color: var(--vermilion);
+}
+
 textarea {
   width: 100%;
   flex: 1;
@@ -431,6 +503,13 @@ textarea::placeholder {
   margin-bottom: 5px;
 }
 
+.loading-note {
+  max-width: 34ch;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .empty-title {
   color: var(--ink-indigo);
   font-family: 'Source Serif 4 Variable', Georgia, serif;
@@ -529,6 +608,19 @@ footer {
 @media (max-width: 560px) {
   .app-shell {
     padding: 20px 14px;
+  }
+
+  .segmented {
+    grid-template-columns: 1fr;
+  }
+
+  .segment {
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .segment:last-child {
+    border-bottom: 0;
   }
 
   .masthead {

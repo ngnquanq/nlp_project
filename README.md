@@ -132,7 +132,9 @@ generated artifacts; `repro-smoke` requires a GPU.
 The `feature/e1-mt-web-ui` branch adds a local React/FastAPI translation desk for
 the E1 model. The interface and API are safe to publish, while the private
 checkpoint and Fairseq `data-bin` remain external and are injected with environment
-variables. See [`docs/MT_UI.md`](docs/MT_UI.md) for setup and operating instructions.
+variables. The desk serves both E1 and E2 — E2 runs as a separate sidecar process
+because the Fairseq and Qwen dependency stacks are mutually exclusive. See
+[`docs/MT_UI.md`](docs/MT_UI.md) for the architecture, setup and operating instructions.
 
 ## Experiment policy
 

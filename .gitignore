@@ -11,6 +11,9 @@ ui/dist/
 ui/coverage/
 ui/playwright-report/
 
+# Pidfiles and logs for the backgrounded UI services (make ui-up)
+.run/
+
 # Secrets and machine-local configuration
 .env
 .env.*

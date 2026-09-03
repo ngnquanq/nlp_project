@@ -1,9 +1,34 @@
-export type HealthResponse = {
-  status: 'ready' | 'model_unavailable'
+export type ModelKey = 'e1' | 'e2'
+export type ModelStatus = 'ready' | 'not_loaded' | 'unavailable'
+
+export type ModelLimits = {
+  max_characters: number
+  /** Always a real number: the counter renders it directly. */
+  max_units: number
+  unit: 'position' | 'token'
+  unit_label: string
+  client_estimate: boolean
+  chars_per_unit: number | null
+}
+
+export type ModelHealth = {
+  key: ModelKey
   model_id: string
+  label: string
+  sublabel: string
+  status: ModelStatus
   device: string
   parameter_count: number | null
   message: string | null
+  limits: ModelLimits
+  reports_unknown_tokens: boolean
+  slow_first_request: boolean
+}
+
+export type HealthResponse = {
+  status: 'ready' | 'degraded' | 'model_unavailable'
+  default_model: ModelKey
+  models: ModelHealth[]
 }
 
 export type TranslationResponse = {
@@ -56,12 +81,13 @@ export async function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
 
 export async function translateText(
   text: string,
+  model: ModelKey,
   signal?: AbortSignal,
 ): Promise<TranslationResponse> {
   const response = await fetch('/api/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, model }),
     signal,
   })
   if (!response.ok) throw await parseError(response)

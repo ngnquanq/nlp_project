@@ -26,7 +26,7 @@ def resolved_env(env: Mapping[str, str] | None) -> dict[str, str] | None:
 
 
 class _TeeStream:
-    """Mirror a text stream to the console and a durable transcript."""
+    """Mirror text without taking ownership of either underlying stream."""
 
     def __init__(self, console: TextIO, transcript: TextIO) -> None:
         self.console = console
@@ -43,6 +43,14 @@ class _TeeStream:
 
     def isatty(self) -> bool:
         return False
+
+    def close(self) -> None:
+        """Leave stream lifetime to the console and ``tee_output`` owners.
+
+        Some logging libraries retain ``sys.stderr`` while output is redirected
+        and close that retained object during interpreter shutdown. Closing a
+        tee must not close the real console or an already-managed transcript.
+        """
 
     @property
     def encoding(self) -> str:

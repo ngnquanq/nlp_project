@@ -1,8 +1,10 @@
+from io import StringIO
+
 import pytest
 
 from mt_pipeline.fairseq_runner import ensure_clean_checkpoint_dir
 from mt_pipeline.llm_runner import ensure_clean_adapter_dir
-from mt_pipeline.runtime import tee_output
+from mt_pipeline.runtime import _TeeStream, tee_output
 
 
 def test_fairseq_guard_allows_empty_checkpoint_dir(tmp_path):
@@ -70,3 +72,20 @@ def test_tee_output_preserves_existing_transcript(tmp_path, capsys):
     assert transcript != canonical
     assert transcript.read_text(encoding="utf-8") == "new run\n"
     assert "new run" in capsys.readouterr().out
+
+
+def test_tee_stream_close_is_non_owning_after_transcript_closes(tmp_path):
+    console = StringIO()
+    transcript_path = tmp_path / "transcript.log"
+
+    with transcript_path.open("x", encoding="utf-8") as transcript:
+        stream = _TeeStream(console, transcript)
+        stream.write("captured\n")
+
+    # Reproduces a third-party logging handler closing the stream at interpreter
+    # shutdown, after tee_output has already closed its transcript.
+    stream.close()
+
+    assert not console.closed
+    console.write("console still available\n")
+    assert transcript_path.read_text(encoding="utf-8") == "captured\n"

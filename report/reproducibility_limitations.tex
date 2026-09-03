@@ -1,0 +1,41 @@
+% ============================================================================
+% Fragment dành cho chương Hạn chế/Thảo luận. Chèn sau phần hạn chế thực nghiệm.
+% ============================================================================
+
+\subsection{Giới hạn về provenance và khả năng tái lập}
+
+Các artifact hiện có cho phép đối chiếu dataset, checkpoint, cấu hình giải mã
+và metric bằng SHA-256, nhưng chưa đủ để khẳng định khả năng tái lập hoàn toàn
+từ source. Ba giới hạn cụ thể cần được lưu ý.
+
+\begin{enumerate}
+  \item Manifest của E1 và E3-custom để trống \texttt{git\_revision}. Manifest
+  hiện tại của đoạn chạy tiếp E2 có ghi commit
+  \texttt{bf126970b46a24a65a80542260bcebaac7d15ae2}, nhưng provenance của ba hệ
+  thống vì thế không đồng đều và không đủ để gắn toàn bộ kết quả với một phiên
+  bản source duy nhất.
+
+  \item Log huấn luyện gốc của đoạn E2 đầu tiên đã bị ghi đè. Các giá trị còn
+  lại trong \texttt{training\_\allowbreak history.json},
+  \texttt{trainer\_\allowbreak state.json} và manifest đủ để kiểm tra checkpoint
+  được chọn và diễn biến validation. Tuy nhiên, thời gian 20.328,3 s của đoạn
+  đầu chỉ còn trong tài liệu lịch sử, còn manifest hiện tại chỉ ghi
+  \texttt{train\_\allowbreak runtime=13612.3867} cho đoạn chạy
+  tiếp. Do đó, tổng wall-clock E2 là số tái dựng, không còn một log sơ cấp duy
+  nhất bao phủ cả 910 step.
+
+  \item Manifest E2 hiện tại hard-pin revision nền
+  \texttt{b968826d9c46dd6066d109eabc6255188de91218}; cùng commit này cũng được
+  ghi ở \texttt{resolved\_model\_revision}. Tuy nhiên, freeze record dùng để mở
+  tập test được tạo từ cấu hình ba epoch cũ, trước khi cấu hình hiện tại được
+  cập nhật và hard-pin. Vì vậy, kiểm tra tái lập hiện tại chủ động báo config
+  drift. Trọng số adapter xuất ra vẫn trùng từng byte với checkpoint 400 và
+  khối giải mã không đổi, nhưng hash của toàn bộ thư mục adapter và hash cấu
+  hình không còn trùng freeze record cũ.
+\end{enumerate}
+
+Các điểm trên không phủ định những metric đã lưu, nhưng thu hẹp mức tuyên bố có
+thể đưa ra. Báo cáo có thể khẳng định tính nhất quán của prediction, reference,
+metric và trọng số được chọn trong phạm vi artifact đã kiểm tra; báo cáo không
+nên khẳng định rằng toàn bộ quá trình huấn luyện có thể được tái lập bit-for-bit
+từ trạng thái repo hiện tại.

@@ -74,10 +74,29 @@ def test_health_and_translation_contract() -> None:
     assert health.status_code == 200
     assert health.json() == {
         "status": "ready",
-        "model_id": MODEL_ID,
-        "device": "cpu",
-        "parameter_count": EXPECTED_PARAMETER_COUNT,
-        "message": None,
+        "default_model": "e1",
+        "models": [
+            {
+                "key": "e1",
+                "model_id": MODEL_ID,
+                "label": "E1",
+                "sublabel": "Fairseq Transformer",
+                "status": "ready",
+                "device": "cpu",
+                "parameter_count": EXPECTED_PARAMETER_COUNT,
+                "message": None,
+                "limits": {
+                    "max_characters": 4_000,
+                    "max_units": 256,
+                    "unit": "position",
+                    "unit_label": "vị trí",
+                    "client_estimate": False,
+                    "chars_per_unit": None,
+                },
+                "reports_unknown_tokens": True,
+                "slow_first_request": False,
+            }
+        ],
     }
     assert response.status_code == 200
     assert response.json() == {
