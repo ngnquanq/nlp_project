@@ -61,5 +61,3 @@ decoding:
   max_len_a: 1.2
   max_len_b: 10
   batch_size: 64
-
-# Augmented source format: <tieng viet> __knowledge__ <goi y chu Han>
