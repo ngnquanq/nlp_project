@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import random
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,50 @@ def _metrics():
         BLEU(lowercase=False, tokenize="13a", smooth_method="exp", effective_order=False),
         CHRF(char_order=6, word_order=2, beta=2, lowercase=False, whitespace=False),
     )
+
+
+def metrics_equivalent(
+    stored: Mapping[str, Any],
+    recomputed: Mapping[str, Any],
+    *,
+    score_abs_tol: float = 1e-12,
+) -> bool:
+    """Compare metric payloads while allowing insignificant float-sum drift."""
+    if not isinstance(stored, Mapping) or not isinstance(recomputed, Mapping):
+        return False
+    if stored.keys() != recomputed.keys():
+        return False
+    for metric_name, stored_metric in stored.items():
+        recomputed_metric = recomputed[metric_name]
+        if not isinstance(stored_metric, Mapping) or not isinstance(recomputed_metric, Mapping):
+            return False
+        if stored_metric.keys() != recomputed_metric.keys():
+            return False
+        for field, stored_value in stored_metric.items():
+            recomputed_value = recomputed_metric[field]
+            if field != "score":
+                if stored_value != recomputed_value:
+                    return False
+                continue
+            if (
+                isinstance(stored_value, bool)
+                or isinstance(recomputed_value, bool)
+                or not isinstance(stored_value, (int, float))
+                or not isinstance(recomputed_value, (int, float))
+            ):
+                return False
+            stored_score = float(stored_value)
+            recomputed_score = float(recomputed_value)
+            if not math.isfinite(stored_score) or not math.isfinite(recomputed_score):
+                return False
+            if not math.isclose(
+                stored_score,
+                recomputed_score,
+                rel_tol=0.0,
+                abs_tol=score_abs_tol,
+            ):
+                return False
+    return True
 
 
 def _validated_rows(path: Path) -> list[dict[str, Any]]:

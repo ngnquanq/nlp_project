@@ -18,7 +18,7 @@ from typing import Any
 
 from .config import load_yaml, repo_path
 from .data import dataset_fingerprint
-from .evaluation import evaluate_predictions
+from .evaluation import evaluate_predictions, metrics_equivalent
 from .freeze import ensure_selection_frozen
 
 
@@ -106,7 +106,7 @@ def check_stored_metrics(scratch_dir: str | Path) -> list[dict[str, Any]]:
                 "experiment_id": experiment_id,
                 "split": split,
                 "status": "checked",
-                "ok": recomputed["metrics"] == stored["metrics"],
+                "ok": metrics_equivalent(stored["metrics"], recomputed["metrics"]),
                 "sacrebleu": recomputed["metrics"]["sacrebleu"]["score"],
                 "chrf_pp": recomputed["metrics"]["chrf_pp"]["score"],
             })

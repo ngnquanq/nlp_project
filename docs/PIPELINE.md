@@ -639,7 +639,8 @@ does three things, writing nothing outside `/tmp`:
    outcome against `EXPECTED_FREEZE_STATE` (`repro_check.py:29-36`). Missing artifacts count
    as *skipped*, not failed, so a fresh clone passes honestly.
 2. **Stored metrics.** Recomputes every `metrics/<id>.{val,test}.json` from its prediction
-   file into a scratch directory and asserts **full dict equality including signatures**
+   file into a scratch directory, requires exact structure/signatures/verbose summaries,
+   and compares scores with a `1e-12` absolute tolerance for cross-Python float summation
    (`:100-112`).
 3. **Dataset hashes.** Re-fingerprints the corpus and compares against every manifest's
    recorded split hashes and knowledge hash (`:116-142`).

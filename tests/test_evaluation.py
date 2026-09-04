@@ -1,6 +1,6 @@
 import pytest
 
-from mt_pipeline.evaluation import evaluate_predictions
+from mt_pipeline.evaluation import evaluate_predictions, metrics_equivalent
 from mt_pipeline.io_utils import write_jsonl
 from mt_pipeline.schema import PredictionRecord
 
@@ -31,3 +31,71 @@ def test_identical_predictions_score_perfectly(tmp_path):
     assert result["metrics"]["chrf_pp"]["score"] == pytest.approx(100.0)
     assert "tok:13a" in result["metrics"]["sacrebleu"]["signature"]
     assert "nw:2" in result["metrics"]["chrf_pp"]["signature"]
+
+
+def test_metric_equivalence_allows_cross_python_float_drift():
+    stored = {
+        "sacrebleu": {
+            "score": 29.6209774968959,
+            "signature": "version:2.6.0",
+            "verbose": "BLEU = 29.62",
+        }
+    }
+    recomputed = {
+        "sacrebleu": {
+            "score": 29.620977496895886,
+            "signature": "version:2.6.0",
+            "verbose": "BLEU = 29.62",
+        }
+    }
+
+    assert metrics_equivalent(stored, recomputed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("score", 29.621),
+        ("signature", "version:2.5.1"),
+        ("verbose", "BLEU = 29.63"),
+    ],
+)
+def test_metric_equivalence_rejects_meaningful_changes(field, value):
+    stored = {
+        "sacrebleu": {
+            "score": 29.6209774968959,
+            "signature": "version:2.6.0",
+            "verbose": "BLEU = 29.62",
+        }
+    }
+    recomputed = {"sacrebleu": dict(stored["sacrebleu"])}
+    recomputed["sacrebleu"][field] = value
+
+    assert not metrics_equivalent(stored, recomputed)
+
+
+def test_metric_equivalence_rejects_missing_fields():
+    stored = {
+        "sacrebleu": {
+            "score": 29.6209774968959,
+            "signature": "version:2.6.0",
+            "verbose": "BLEU = 29.62",
+        }
+    }
+    recomputed = {"sacrebleu": {"score": stored["sacrebleu"]["score"]}}
+
+    assert not metrics_equivalent(stored, recomputed)
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), "29.62"])
+def test_metric_equivalence_rejects_invalid_scores(score):
+    stored = {
+        "sacrebleu": {
+            "score": 29.6209774968959,
+            "signature": "version:2.6.0",
+            "verbose": "BLEU = 29.62",
+        }
+    }
+    recomputed = {"sacrebleu": {**stored["sacrebleu"], "score": score}}
+
+    assert not metrics_equivalent(stored, recomputed)

@@ -293,8 +293,9 @@ revision `b968826d9c46…` and the exact `packages` versions from `run_manifest.
 
 **Out of scope.** Retraining anything. Editing the E1, E2, or E3 configs. Re-running
 `make e2-freeze`. Editing `evaluation.py::_metrics` — `check_stored_metrics`
-(`repro_check.py:100-109`) asserts recomputed metrics equal stored metrics including
-signatures, so any supplementary metric must write to a separate path. Building an
+(`repro_check.py:100-109`) requires exact metric metadata and signatures while allowing
+only `1e-12` absolute score drift, so any supplementary metric must write to a separate
+path. Building an
 automated terminology or entity checker, which §12 explicitly does not want. Reporting
 E4 as a result.
 
