@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import load_yaml, repo_path
 from .data import audit_dataset
 from .error_analysis import prepare_annotation_template, summarize_annotations
-from .evaluation import compare_predictions, evaluate_predictions
+from .evaluation import DEFAULT_PROTOCOL, PROTOCOLS, compare_predictions, evaluate_predictions
 
 
 def _backend(config_path: str) -> str:
@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser("evaluate", help="Compute SacreBLEU and chrF++")
     evaluate.add_argument("--predictions", required=True)
     evaluate.add_argument("--output", required=True)
+    evaluate.add_argument("--protocol", choices=PROTOCOLS, default=DEFAULT_PROTOCOL)
 
     compare = subparsers.add_parser("compare", help="Paired bootstrap system comparison")
     compare.add_argument("--baseline", required=True)
@@ -92,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--output", required=True)
     compare.add_argument("--samples", type=int, default=1000)
     compare.add_argument("--seed", type=int, default=12345)
+    compare.add_argument("--protocol", choices=PROTOCOLS, default=DEFAULT_PROTOCOL)
+
+    rescore = subparsers.add_parser("rescore-moses", help="Rescore saved predictions without training")
+    rescore.add_argument("--prediction-dir", default="predictions")
+    rescore.add_argument("--metrics-dir", default="metrics")
+    rescore.add_argument("--output-dir", default="metrics/moses")
 
     errors = subparsers.add_parser("prepare-error-analysis", help="Sample shared test IDs")
     errors.add_argument("--predictions", nargs="+", required=True)
@@ -177,13 +184,18 @@ def main() -> None:
             args.config, args.validation_predictions, args.validation_metrics
         ))
     elif args.command == "evaluate":
-        value = evaluate_predictions(args.predictions, args.output)
+        value = evaluate_predictions(args.predictions, args.output, args.protocol)
         print(json.dumps(value["metrics"], ensure_ascii=False))
     elif args.command == "compare":
         value = compare_predictions(
-            args.baseline, args.candidate, args.output, args.samples, args.seed
+            args.baseline, args.candidate, args.output, args.samples, args.seed, args.protocol
         )
         print(json.dumps(value["metrics"], ensure_ascii=False))
+    elif args.command == "rescore-moses":
+        from .rescore import rescore_moses
+
+        print(json.dumps(rescore_moses(args.prediction_dir, args.metrics_dir, args.output_dir),
+                         ensure_ascii=False, indent=2))
     elif args.command == "prepare-error-analysis":
         print(prepare_annotation_template(
             args.predictions, args.output, args.sample_size, args.seed

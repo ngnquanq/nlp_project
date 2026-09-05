@@ -14,3 +14,4 @@ dependencies:
   - pip:
       - fairseq==0.12.2
       - sacrebleu==2.6.0
+      - sacremoses==0.2.0

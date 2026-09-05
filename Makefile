@@ -1,4 +1,4 @@
-.PHONY: audit test test-source test-private check check-source check-private \
+.PHONY: rescore-moses audit test test-source test-private check check-source check-private \
         status repro-check repro-smoke derive-configs compare-e4 \
         ui-install ui-api ui-web ui-build ui-serve ui-check ui-private-model \
         ui-install-e2 ui-api-e2 ui-check-e2 ui-e2-model \
@@ -74,6 +74,10 @@ test-source:
 
 test-private:
 	$(EVAL_PYTHON) -m pytest -q
+
+rescore-moses:
+	$(EVAL) rescore-moses --prediction-dir $(PRED_DIR) --metrics-dir $(METRICS_DIR) \
+	  --output-dir $(METRICS_DIR)/moses
 
 status:
 	$(EVAL) project-status

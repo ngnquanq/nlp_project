@@ -15,6 +15,7 @@ dependencies:
       - datasets>=3.6,<5
       - peft>=0.15,<1
       - sacrebleu==2.6.0
+      - sacremoses==0.2.0
       - transformers>=4.51,<5
       - trl>=0.17,<1
       - pytest==8.4.1

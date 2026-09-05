@@ -7,6 +7,8 @@ datasets==4.8.5
 peft==0.20.0
 PyYAML==6.0.2
 sacrebleu==2.6.0
+# Evaluation-only dependency added after the historical training run.
+sacremoses==0.2.0
 transformers==4.57.6
 trl==0.29.1
 pytest==8.4.1
