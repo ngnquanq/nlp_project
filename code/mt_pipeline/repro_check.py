@@ -18,7 +18,7 @@ from typing import Any
 
 from .config import load_yaml, repo_path
 from .data import dataset_fingerprint
-from .evaluation import evaluate_predictions, metrics_equivalent
+from .evaluation import evaluate_predictions, metrics_equivalent, protocol_from_metrics
 from .freeze import ensure_selection_frozen
 
 
@@ -97,19 +97,36 @@ def check_stored_metrics(scratch_dir: str | Path) -> list[dict[str, Any]]:
                     "reason": "no stored predictions/metrics on disk",
                 })
                 continue
-            recomputed = evaluate_predictions(
-                predictions, scratch / f"{experiment_id}.{split}.json"
-            )
             with stored_path.open(encoding="utf-8") as handle:
                 stored = json.load(handle)
+            recomputed = evaluate_predictions(
+                predictions, scratch / f"{experiment_id}.{split}.json",
+                protocol_from_metrics(stored["metrics"]),
+            )
             results.append({
                 "experiment_id": experiment_id,
                 "split": split,
                 "status": "checked",
-                "ok": metrics_equivalent(stored["metrics"], recomputed["metrics"]),
+                "ok": (stored["prediction_sha256"] == recomputed["prediction_sha256"]
+                       and metrics_equivalent(stored["metrics"], recomputed["metrics"])),
                 "sacrebleu": recomputed["metrics"]["sacrebleu"]["score"],
                 "chrf_pp": recomputed["metrics"]["chrf_pp"]["score"],
             })
+    for stored_path in sorted(repo_path("metrics/moses").glob("*.json")):
+        stored = json.loads(stored_path.read_text(encoding="utf-8"))
+        if "experiment_id" not in stored:
+            continue
+        predictions = repo_path(f"predictions/{stored_path.stem}.jsonl")
+        recomputed = evaluate_predictions(
+            predictions, scratch / "moses" / stored_path.name,
+            protocol_from_metrics(stored["metrics"]),
+        )
+        results.append({
+            "experiment_id": stored["experiment_id"], "split": stored["split"],
+            "metric_file": str(stored_path), "status": "checked",
+            "ok": (stored["prediction_sha256"] == recomputed["prediction_sha256"]
+                   and metrics_equivalent(stored["metrics"], recomputed["metrics"])),
+        })
     return results
 
 

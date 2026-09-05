@@ -29,7 +29,8 @@ def test_identical_predictions_score_perfectly(tmp_path):
     result = evaluate_predictions(predictions, output)
     assert result["metrics"]["sacrebleu"]["score"] == pytest.approx(100.0)
     assert result["metrics"]["chrf_pp"]["score"] == pytest.approx(100.0)
-    assert "tok:13a" in result["metrics"]["sacrebleu"]["signature"]
+    assert "tok:none" in result["metrics"]["sacrebleu"]["signature"]
+    assert result["metrics"]["sacrebleu"]["preprocessing"]["protocol"] == "moses-char-v1"
     assert "nw:2" in result["metrics"]["chrf_pp"]["signature"]
 
 
