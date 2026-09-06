@@ -31,6 +31,11 @@ en-vi/
 artifacts/
 PROJECT_SPECIFICATION_v1.3.docx
 2021.icon-main.4.pdf
+# Upload scratch: holds spec conversions and a copy of the corpus, never report source
+report/prism-uploads/
+# Submission archive and any directory it is extracted into
+group10_submission_bundle.zip
+group10_submission_bundle/
 
 # Generated experiment state. Keep the directory contracts documented.
 checkpoint/*
@@ -44,6 +49,12 @@ runs/
 error_analysis/manual_sample.csv
 error_analysis/manual_sample.jsonl
 error_analysis/summary.json
+error_analysis/automatic_summary.json
+error_analysis/automatic_labels.csv
+
+# Heuristic error-analysis workbooks produced by Error_Analysis.py
+# (covers Error_Analysis_PreLabeled/_Labeled and any renamed output)
+Error_Analysis*.xlsx
 
 # Large model/training formats and generated submission documents
 *.pt
@@ -53,4 +64,26 @@ error_analysis/summary.json
 *.idx
 *.zip
 report.pdf
+
+# LaTeX build intermediates (the PDFs themselves are ignored above)
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.out
+report/*.toc
+report/*.xdv
+report/*.synctex.gz
+slides/*.aux
+slides/*.bbl
+slides/*.blg
+slides/*.fdb_latexmk
+slides/*.fls
+slides/*.log
+slides/*.out
+slides/*.toc
+slides/*.xdv
+slides/*.synctex.gz
 slides.pdf

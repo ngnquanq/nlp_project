@@ -35,7 +35,10 @@ Add hardware, wall-clock time, seeds, resolved package versions, checkpoint-sele
 | E1 Fairseq | TBD | TBD | TBD |
 | E2 Qwen3 QLoRA | TBD | TBD | TBD |
 
-Copy complete metric signatures from `metrics/` and report paired bootstrap results.
+Use the executed Moses results in `metrics/moses/`, including paired bootstrap results.
+Copy both metric signatures and BLEU's external `preprocessing` metadata. Describe
+the retained Chinese character segmentation and distinguish historical Fairseq
+checkpoint-selection BLEU from final Moses evaluation; see `docs/MOSES_EVALUATION.md`.
 
 ## 6. Error Analysis
 
@@ -52,4 +55,3 @@ Cover corpus size, self-aligned training data, repeated pairs, missing glyphs, p
 ## 9. Conclusion
 
 Summarize only verified findings.
-

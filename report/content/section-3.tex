@@ -1,0 +1,1840 @@
+% % Yêu cầu preamble: \usepackage{tabularx}, \usepackage{booktabs}, \usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,shapes.geometric}
+
+\section{Phương pháp}
+\subsection{Tổng quan pipeline}
+
+Hình~\ref{fig:pipeline} minh hoạ toàn bộ pipeline dùng chung cho ba thí nghiệm: hai đầu
+được chia sẻ, phần giữa là ba quy trình khác nhau. Việc nhìn tổng thể trước khi đi vào
+chi tiết từng thí nghiệm (mục 3.3--3.5) giúp thấy rõ đâu là phần chung, đâu là phần
+riêng biệt tạo nên khác biệt giữa các hệ thống.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{img/mt_pipeline.png}
+  \caption{Tổng quan pipeline}
+  \label{fig:pipeline}
+\end{figure}
+
+Ở đầu vào, cả ba thí nghiệm cùng đi qua một cấu hình dữ liệu và bước \texttt{read\_split}
+duy nhất (mục 3.1): chuẩn hoá NFC, gộp khoảng trắng, gán định danh mẫu và kiểm tra toàn
+vẹn số dòng. Từ đây, pipeline rẽ thành ba nhánh độc lập. \texttt{E1} giữ nguyên văn bản
+đã tách token sẵn và huấn luyện toàn bộ trọng số một Transformer Fairseq từ đầu.
+\texttt{E3-custom} đi theo đúng con đường Fairseq như \texttt{E1} nhưng bổ sung thêm
+gợi ý Hán tự truy hồi vào câu nguồn trước khi huấn luyện — cũng huấn luyện toàn bộ
+trọng số, chỉ khác ở dữ liệu đầu vào. \texttt{E2} tách khỏi con đường Fairseq hoàn toàn và chạy hoàn toàn dựa vào việc chúng ta thiết kế system prompt:
+dữ liệu được đóng gói thành định dạng hội thoại với loss chỉ tính trên phần trả lời, và
+chỉ một phần rất nhỏ tham số (adapter LoRA) được huấn luyện trên một mô hình nền đã
+đóng băng và lượng tử hoá 4-bit.
+
+Ba nhánh hội tụ trở lại ở một quy trình đánh giá dùng chung. Cả ba mô hình đều được
+dùng để dự đoán và chấm điểm trên tập validation; kết quả này quyết định việc chốt
+một cấu hình mô hình duy nhất cho mỗi thí nghiệm — khoá lại hash mô hình, cấu hình, cách
+decode ra tiếng Hán để đảm bảo thí nghiệm có thể chạy lại với kết quả y hệt, và kiểm tra artifact trước khi chúng ta thực hiện dự đoán trên tập test. Dự đoán cuối cùng được chuẩn hoá về cùng một dạng chấm điểm (mục
+3.6) trước khi tính BLEU và chrF++, và chênh lệch giữa các thí nghiệm được kiểm định bằng
+paired bootstrap (mục 3.7).
+
+\subsection{Dữ liệu và Tiền xử lý}
+
+Trước khi dữ liệu song ngữ Việt--Hán văn cổ được đưa vào bất kỳ thí nghiệm nào, toàn bộ
+ba phân hoạch (train, validation, test) đều đi qua một tầng tiền xử lý dùng chung, gồm
+ba thành phần: (i) một bước \textit{chuẩn hoá văn bản} áp dụng đồng nhất cho cả hai phía
+nguồn/đích; (ii) một bước \textit{đọc và kiểm tra toàn vẹn dữ liệu} chịu trách nhiệm gán
+định danh mẫu và chặn đứng mọi lệch lạc về số dòng; và (iii) một tầng \textit{biểu diễn
+văn bản đích dưới nhiều dạng} phục vụ ba mục đích khác nhau: huấn luyện, hiển thị, và
+chấm điểm. Tầng tiền xử lý này được cài đặt trong \texttt{code/mt\_pipeline/normalize.py}
+và \texttt{code/mt\_pipeline/data.py}, và là điểm khởi đầu chung cho cả ba thí nghiệm E1,
+E2 và E3-custom trước khi mỗi thí nghiệm rẽ theo hướng chuẩn bị dữ liệu riêng của mình.
+
+\subsubsection{Chuẩn hoá văn bản}
+
+Hàm \texttt{normalize\_whitespace} được áp dụng cho cả câu nguồn tiếng Việt lẫn câu đích
+Hán văn ngay khi đọc dữ liệu:
+\begin{equation}
+  \texttt{normalize\_whitespace}(s) = \mathrm{strip}\Big(\mathrm{collapse}_{\backslash s+ \to \text{"~"}}\big(\mathrm{NFC}(s)\big)\Big),
+  \label{eq:normalize-whitespace}
+\end{equation}
+trong đó $s$ là chuỗi văn bản thô đọc từ tệp corpus, $\mathrm{NFC}(\cdot)$ là phép chuẩn
+hoá Unicode theo dạng \textit{Normalization Form Canonical Composition},
+$\mathrm{collapse}_{\backslash s+ \to \text{"~"}}(\cdot)$ là phép thay thế mọi chuỗi
+khoảng trắng liên tiếp bằng đúng một dấu cách, và $\mathrm{strip}(\cdot)$ là phép cắt bỏ
+khoảng trắng thừa ở hai đầu chuỗi.
+
+Bước NFC là cần thiết vì tiếng Việt có dấu thanh và dấu phụ có thể được mã hoá theo hai
+cách tương đương nhưng khác biểu diễn byte: dạng \textit{dựng sẵn} (một mã Unicode duy
+nhất cho cả âm tiết có dấu) và dạng \textit{tổ hợp} (ký tự gốc cộng thêm một dấu kết hợp
+riêng biệt). Lấy ví dụ như: chữ \texttt{"ả"} có thể là một mã Unicode duy nhất
+\texttt{U+1EA3} (dạng dựng sẵn), hoặc là hai mã Unicode nối tiếp nhau
+\texttt{"a" (U+0061) + dấu hỏi kết hợp (U+0309)} (dạng tổ hợp) — hai chuỗi byte hoàn
+toàn khác nhau nhưng hiển thị giống hệt \texttt{"ả"}. Nếu không ép cả hai về cùng một
+dạng, hai câu nhìn giống hệt nhau có thể bị xem là khác nhau khi so khớp chuỗi, dẫn tới
+sai lệch khi gán định danh, kiểm tra trùng lặp hay tra cứu từ điển; sau khi qua
+$\mathrm{NFC}(\cdot)$, cả hai đều quy về đúng một dạng \texttt{U+1EA3}.
+
+Tương tự, với một dòng thô đọc từ tệp có khoảng trắng không nhất quán, chẳng hạn
+\texttt{"Vua~~sai\textbackslash tngười"} (hai dấu cách liên tiếp rồi một tab), phép
+$\mathrm{collapse}_{\backslash s+ \to \text{"~"}}(\cdot)$ gộp toàn bộ chuỗi khoảng trắng
+đó lại thành đúng một dấu cách, cho ra \texttt{"Vua~sai~người"} — đảm bảo ranh giới token
+luôn nhất quán bất kể tệp gốc chứa tab, xuống dòng thừa hay nhiều dấu cách liên tiếp do
+lỗi định dạng khi xuất corpus.
+
+\subsubsection{Đọc dữ liệu và kiểm tra toàn vẹn}
+
+Hàm \texttt{read\_split} (\texttt{data.py}) là điểm đọc dữ liệu duy nhất của toàn bộ
+pipeline. Với mỗi phân hoạch, hàm này: đọc đồng thời hai tệp nguồn và đích; buộc dừng
+chương trình nếu số dòng hai phía không bằng nhau; buộc dừng chương trình nếu số dòng
+đọc được khác với số dòng kỳ vọng \texttt{expected\_lines} khai báo trong cấu hình dữ
+liệu; gán cho mỗi cặp câu một định danh duy nhất theo quy tắc
+$\texttt{sample\_id} = \texttt{f"\{split\}-\{index:06d\}"}$; và áp dụng phép chuẩn hoá ở
+Công thức~\ref{eq:normalize-whitespace} cho cả hai phía.
+
+Lấy ví dụ như: với phân hoạch \texttt{train} và dòng thứ 42 (đếm từ 1), định danh mẫu
+được gán là $\texttt{sample\_id} = \texttt{"train-000042"}$ — định danh này giữ nguyên
+không đổi xuyên suốt pipeline, dùng để đối chiếu dự đoán với tham chiếu và để ghép cặp
+đúng câu khi so sánh hai hệ thống ở mục 3.7. Về hai điều kiện hard-fail: giả sử tệp
+nguồn tiếng Việt của tập train có 19.218 dòng nhưng tệp đích Hán văn chỉ có 19.217 dòng
+(một dòng bị rơi mất do lỗi khi xuất tệp, hoặc một bản sửa tệp không đồng bộ giữa hai
+phía) — \texttt{read\_split} sẽ dừng chương trình ngay lập tức với lỗi báo số dòng hai
+phía không khớp, thay vì âm thầm ghép lệch câu nguồn với câu đích của dòng kế tiếp và để
+lỗi đó lan vào toàn bộ quá trình huấn luyện mà không ai phát hiện. Tương tự, nếu cấu hình
+khai báo \texttt{expected\_lines: 19218} cho tập train nhưng tệp thực tế chỉ có 19.000
+dòng (ví dụ do tải nhầm một phiên bản corpus cũ hoặc bị cắt xén khi sao chép), hàm cũng
+dừng ngay thay vì lặng lẽ huấn luyện trên một tập dữ liệu nhỏ hơn dự kiến. Hai điều kiện
+hard-fail này đóng vai trò một cổng toàn vẹn dữ liệu, đảm bảo một tệp corpus bị hoán đổi
+nhầm hoặc bị cắt xén không thể lọt vào một lượt chạy thực nghiệm mà không bị phát hiện
+ngay từ bước đọc dữ liệu đầu tiên.
+
+\subsubsection{Ba dạng biểu diễn của câu đầu ra}
+
+Vì phía Hán văn được cung cấp sẵn dưới dạng tách ký tự, mỗi dòng dữ liệu đích cần được
+biểu diễn dưới ba dạng khác nhau tuỳ mục đích sử dụng:
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Ba dạng biểu diễn của câu đích Hán văn}
+    \label{tab:three-text-forms}
+    \begin{tabularx}{\textwidth}{@{}
+        >{\raggedright\arraybackslash}p{0.26\textwidth}
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}X@{}}
+        \toprule
+        \textbf{Dạng} & \textbf{Định nghĩa} & \textbf{Dùng cho} \\
+        \midrule
+        \texttt{reference\_tokenized} & dòng gốc đã chuẩn hoá khoảng trắng & mục tiêu huấn luyện/đánh giá của Fairseq \\
+        \texttt{reference} & \texttt{detokenize\_chinese}: nối ký tự, bỏ khoảng trắng & câu tham chiếu người đọc; mục tiêu huấn luyện của E2 \\
+        \texttt{reference\_scored} & \texttt{score\_form\_chinese}: tách lại từng ký tự, nối bằng một dấu cách & đầu vào chấm điểm BLEU/chrF++ \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+Về mặt hình thức:
+$$
+\texttt{reference} = \mathrm{join}_{\varnothing}(\texttt{reference\_tokenized})
+$$
+còn
+$$\texttt{reference\_scored} = \mathrm{join}_{\text{"~"}}\big(\mathrm{split}_{\text{codepoint}}(\texttt{reference})\big)$$
+— tức \texttt{reference\_scored} là một phép tách--gộp--tách lại đi qua dạng không
+khoảng trắng.
+
+Lấy ví dụ như: với \texttt{reference\_tokenized} là \texttt{"如 使 越 人"}, áp dụng
+\texttt{detokenize\_chinese} cho ra \texttt{reference} = \texttt{"如使越人"} (đã bỏ hết
+khoảng trắng). Từ \texttt{reference} này, áp dụng tiếp \texttt{score\_form\_chinese} —
+tách lại thành từng ký tự Unicode riêng lẻ rồi chèn một dấu cách giữa mỗi ký tự — cho ra
+\texttt{reference\_scored} = \texttt{"如 使 越 人"}, \textbf{trùng khớp tuyệt đối} với
+\texttt{reference\_tokenized} ban đầu. Kết quả này không phải ngẫu nhiên: nó minh hoạ
+chính xác ý nghĩa của phép round-trip — đi một vòng qua dạng không khoảng trắng rồi tách
+trở lại, ta thu được đúng dạng ban đầu, chứng tỏ không mất thông tin gì trong quá trình.
+Bước tách--gộp--tách lại này được áp dụng như nhau cho \textit{mọi} hệ thống, kể cả những
+hệ thống không tự nhiên sinh ra dạng tách-ký-tự (như \texttt{E2}, vốn sinh Hán văn liền
+mạch giống hệt dạng \texttt{reference}): nhờ vậy, dự đoán của cả ba thí nghiệm đều được
+ép về cùng một chuẩn (một Hán tự = một token) trước khi đưa vào chấm điểm, đảm bảo phép
+so sánh BLEU/chrF++ công bằng dù các hệ thống có định dạng đầu ra thô khác nhau.
+
+Phép round-trip này chỉ không mất thông tin khi mọi token gốc trong corpus đúng là một
+codepoint duy nhất; điều kiện này đã được xác minh thực nghiệm trên toàn bộ 20.238 dòng
+của cả ba phân hoạch, không có ngoại lệ. Việc tách riêng ba dạng biểu diễn này là điều
+kiện cần để các chỉ số đánh giá (mục 3.6) được định nghĩa nhất quán giữa các thí nghiệm
+có định dạng đầu ra khác nhau.
+
+\subsubsection{Chính sách không dùng subword}
+
+Khi xây dựng từ điển cho Fairseq, ngưỡng tần suất tối thiểu được đặt bằng 1 ở cả hai phía
+(\texttt{--thresholdsrc 1 --thresholdtgt 1}), nghĩa là không áp dụng bất kỳ thuật toán
+ghép subword nào (không BPE, không WordPiece) và toàn bộ từ vựng xuất hiện trong tập
+train đều được giữ nguyên. Kết quả: từ điển tiếng Việt có 3.616 loại từ (word-level), từ
+điển Hán văn có 5.392 loại ký tự (character-level). Lựa chọn này có chủ đích: ghép các
+chuỗi Hán tự liên tiếp thành đơn vị subword theo thống kê đồng xuất hiện chỉ đáng tin cậy
+khi học trên một corpus đủ lớn; với một corpus nhỏ, phạm vi hẹp như \textit{Đại Việt sử
+ký toàn thư}, một mô hình subword riêng có nguy cơ tạo ra các đơn vị ghép không ổn định,
+phụ thuộc mạnh vào các mẫu câu lặp lại đặc trưng của corpus hơn là phản ánh đúng cấu trúc
+ngôn ngữ. Cái giá phải trả: từ điển cố định không sinh được những ký tự chỉ xuất hiện ở
+tập giữ riêng — 34 token đích ngoài từ điển ở validation, 45 ở test.
+
+\subsection{Thí nghiệm 1 (E1): Transformer huấn luyện từ đầu}
+
+\subsubsection{Kiến trúc Transformer}
+
+Transformer~\cite{vaswani2017attention} là một kiến trúc mạng nơ-ron cho bài toán chuỗi
+sang chuỗi, gồm hai khối \textit{encoder} và \textit{decoder}, xây dựng hoàn toàn từ cơ
+chế \textit{self-attention} thay vì hồi quy (RNN/LSTM) hay tích chập (CNN). Thành phần
+cốt lõi là \textit{scaled dot-product attention}:
+\begin{equation}
+  \mathrm{Attention}(Q,K,V) = \mathrm{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V,
+  \label{eq:e1-attention}
+\end{equation}
+trong đó $Q$ (query), $K$ (key) và $V$ (value) là ba phép chiếu tuyến tính khác nhau của
+cùng một biểu diễn đầu vào; tích $QK^{\top}$ đo độ tương đồng giữa mỗi cặp vị trí, chia
+cho $\sqrt{d_k}$ để tránh giá trị quá lớn làm softmax bão hoà; kết quả softmax là trọng số
+attention dùng để lấy tổ hợp trọng số của $V$. \textit{Multi-head attention} chạy song
+song $h$ head attention trên $h$ phép chiếu khác nhau rồi nối kết quả lại, giúp mô hình
+chú ý đồng thời tới nhiều loại quan hệ khác nhau giữa các vị trí trong câu.
+
+Kiến trúc này phù hợp với dịch máy vì hai lý do: self-attention cho phép mỗi vị trí chú
+ý trực tiếp tới mọi vị trí khác qua một bước duy nhất (giảm vanishing gradient với câu
+dài, hữu ích khi trật tự từ giữa tiếng Việt và Hán văn cổ có thể lệch xa nhau); và vì
+không có hồi quy tuần tự như dạng cấu trúc RNN hay LSTM, toàn bộ chuỗi input vào trong mô hình sẽ được xử lý song song khi huấn luyện.
+
+\subsubsection{Fairseq}
+
+Fairseq~\cite{ott2019fairseq} là một toolkit huấn luyện mô hình chuỗi mã nguồn mở, xây
+dựng trên PyTorch. Fairseq cung cấp cài đặt tham chiếu cho Transformer cùng hạ tầng huấn
+luyện/giải mã chuẩn hoá (gom batch theo token, checkpoint, beam search,v.v...). \texttt{E1}
+dùng Fairseq thay vì tự cài đặt lại, để bám sát một cài đặt chuẩn đã được kiểm chứng rộng
+rãi, tập trung nỗ lực vào lựa chọn dữ liệu/cấu hình thay vì hiện thực hoá mô hình.
+
+\subsubsection{Cấu hình và hàm mục tiêu}
+
+\texttt{E1} dùng Transformer encoder--decoder tiêu chuẩn: sáu lớp mỗi khối, biểu diễn
+512 chiều, feed-forward 2.048 chiều, tám attention head, dropout 0,1. Embedding đầu vào
+và ma trận chiếu đầu ra của decoder chia sẻ trọng số. Mô hình có 67.652.608 tham số, tối
+ưu từ đầu, không qua fine-tuning. Ở phía tiếng Việt, đơn vị đầu vào là token có sẵn trong
+corpus; ở phía Hán văn, mỗi ký tự là một token, theo đúng chính sách không dùng BPE đã
+nêu ở mục 3.1.
+
+Với câu đích $y_{1:T}$, \texttt{E1} tối thiểu hoá hàm cross-entropy có label smoothing
+$\varepsilon=0{,}1$:
+\begin{equation}
+  \mathcal{L}_{\mathrm{E1}}
+  = -\sum_{t=1}^{T}\left[(1-\varepsilon)\log p(y_t\mid y_{<t},x)
+  + \frac{\varepsilon}{|V|}\sum_{v\in V}\log p(v\mid y_{<t},x)\right].
+  \label{eq:e1-loss}
+\end{equation}
+Bộ tối ưu Adam dùng $\beta=(0{,}9,\,0{,}998)$, learning rate cực đại $5\times10^{-4}$ và
+lịch \texttt{inverse\_sqrt} sau 8.000 update warmup. Mỗi GPU nhận tối đa 1.000 token;
+\texttt{update\_freq=4} tạo batch hiệu dụng khoảng 4.000 token. Huấn luyện chạy ở fp16
+trên một GPU, giới hạn 50.000 update hoặc 500 epoch, patience 20 theo BLEU validation.
+Cần lưu ý checkpoint được báo cáo đã \textit{warm-start}: nạp lại trọng số từ một lần
+chạy trước bị gián đoạn ở epoch 5 (update 579), sau đó tiếp tục và early-stop ở epoch
+171 (24.791 update) — một hạn chế về khả năng tái lập từ một lần chạy sạch cần ghi nhận.
+
+\subsubsection{Giải mã bằng beam search}
+
+Thay vì luôn chọn token xác suất cao nhất ở mỗi bước (\textit{greedy decoding}, dễ mắc
+kẹt vào chuỗi con tối ưu cục bộ), \texttt{E1} dùng beam search với $B=7$: duy trì đồng
+thời $B$ giả thuyết có tổng log-xác suất cao nhất, mở rộng mỗi giả thuyết bằng mọi token
+kế tiếp, chỉ giữ lại $B$ chuỗi tốt nhất cho bước sau, lặp tới khi mọi beam kết thúc câu
+hoặc chạm giới hạn độ dài.
+
+Vì tổng log-xác suất giảm dần theo số token, một chuỗi ngắn hơn sẽ có điểm cao hơn một
+cách giả tạo nếu không hiệu chỉnh. Fairseq chuẩn hoá điểm theo độ dài với hệ số length
+penalty $\alpha$:
+\begin{equation}
+  \mathrm{score}(y) = \frac{1}{|y|^{\alpha}}\sum_{t=1}^{|y|}\log p(y_t\mid y_{<t},x),
+  \label{eq:e1-beam-score}
+\end{equation}
+\texttt{E1} dùng $\alpha=1{,}0$ — điểm cuối chính là log-xác suất trung bình mỗi token,
+không thiên vị thêm ngoài chuẩn hoá độ dài tự nhiên. Độ dài đích tối đa giới hạn theo
+$1{,}2|x|+10$ token, với $|x|$ là độ dài câu nguồn — ngăn mô hình sinh chuỗi kéo dài vô
+hạn định với câu nguồn dài. Các giá trị beam, length penalty và giới hạn độ dài này được
+cố định trước khi chạy, không phải kết quả tìm kiếm siêu tham số.
+
+
+\subsubsection{Ví dụ minh hoạ toàn bộ quy trình}
+
+Để cụ thể hoá các khái niệm trên, xét một câu ví dụ minh hoạ (không phải câu thật trong
+corpus): câu nguồn tiếng Việt \texttt{"Vua sai sứ sang nước Tống"} cần dịch thành Hán
+văn cổ tương ứng "王 遣 使 如 宋".
+
+\paragraph{Input đưa vào mô hình.} Vì phía tiếng Việt đã được tách token sẵn trong
+corpus, câu nguồn là chuỗi 6 token \texttt{["Vua","sai","sứ","sang","nước","Tống"]};
+câu đích Hán văn, tách theo ký tự, là chuỗi 5 token ["王","遣","使","如","宋"]. Sau bước
+tiền xử lý ở mục 3.1 (chuẩn hoá NFC + gộp khoảng trắng), hai chuỗi này được ghi ra file
+văn bản thô (\texttt{text/train.vi}, \texttt{text/train.zh}). Mô hình Transformer không
+đọc trực tiếp chuỗi ký tự — mỗi token được ánh xạ sang một chỉ số nguyên duy nhất trong
+từ điển tương ứng (\texttt{dict.vi.txt} cho phía nguồn, \texttt{dict.zh.txt} cho phía
+đích): ví dụ \texttt{"Vua"} $\to$ id 42, \texttt{"sai"} $\to$ id 803, chữ "王" $\to$ id
+187, chữ "遣" $\to$ id 1204, v.v. Chuỗi chỉ số này (\emph{không phải} chuỗi ký tự) mới là
+đầu vào số học thực sự được đưa vào embedding layer của encoder/decoder.
+
+\paragraph{Fairseq construct những gì.} Bước nhị phân hoá chạy đúng một lệnh:
+\begin{quote}\ttfamily\small
+fairseq-preprocess --source-lang vi --target-lang zh \\
+\quad --trainpref text/train --validpref text/valid --testpref text/test \\
+\quad --destdir data-bin --thresholdsrc 1 --thresholdtgt 1 --workers 4
+\end{quote}
+Lệnh này quét toàn bộ \texttt{text/train.\{vi,zh\}}, xây hai từ điển
+\texttt{dict.vi.txt}/\texttt{dict.zh.txt} (mỗi dòng là một token kèm tần suất xuất hiện,
+sắp theo tần suất giảm dần), rồi mã hoá mọi câu của cả ba phân hoạch thành cặp tệp nhị
+phân \texttt{.bin}/\texttt{.idx} (mảng chỉ số nguyên nén, đọc nhanh hơn nhiều so với parse
+văn bản mỗi epoch). Kết quả nằm trong thư mục \texttt{data-bin/}, là đầu vào duy nhất cho
+bước huấn luyện tiếp theo — tức Fairseq không "học" trực tiếp trên file text, mà học trên
+biểu diễn nhị phân đã được lập chỉ mục này. Bước huấn luyện sau đó gọi
+\texttt{fairseq-train} trên \texttt{data-bin/} với toàn bộ cờ kiến trúc/tối ưu đã liệt kê
+ở mục trên (\texttt{--arch transformer --encoder-layers 6 ... --lr 5e-4 ...}), ghi
+checkpoint định kỳ vào \texttt{checkpoint\_dir}.
+
+\paragraph{Output nhìn như thế nào.} Khi giải mã (dùng \texttt{fairseq-generate} trên
+checkpoint tốt nhất), với mỗi câu, công cụ in ra 4 dòng gắn theo chỉ số câu, ví dụ với
+câu thứ 3 (định dạng \texttt{S-}/\texttt{T-}/\texttt{H-}/\texttt{D-} là quy ước gốc của
+Fairseq, phần văn bản Hán/Việt giữ nguyên font thường vì font monospace không có glyph
+chữ Hán):
+
+\begin{quote}\small
+\texttt{S-3}\quad Vua sai sứ sang nước Tống \\
+\texttt{T-3}\quad 王 遣 使 如 宋 \\
+\texttt{H-3}\quad $-0{,}3821$\quad 王 遣 使 如 宋 \\
+\texttt{D-3}\quad $-0{,}3821$\quad 王 遣 使 如 宋
+\end{quote}
+trong đó \texttt{S} là câu nguồn, \texttt{T} là câu đích tham chiếu, \texttt{H} là giả
+thuyết (hypothesis) tốt nhất cùng log-xác suất trung bình mỗi token của nó (chính là
+Công thức~\ref{eq:e1-beam-score}), và \texttt{D} là bản detokenize của \texttt{H} (ở đây
+trùng nhau vì không có hậu xử lý detokenize riêng phía Fairseq). Pipeline chỉ đọc dòng
+\texttt{H-}, tách ra được chuỗi ký tự "王 遣 使 如 宋" — đây chính là
+\texttt{reference\_tokenized}-dạng của dự đoán. Từ đó, hai phép biến đổi ở mục 3.1 được
+áp dụng: \texttt{detokenize\_chinese} cho ra \texttt{prediction} = "王遣使如宋" (dạng
+người đọc), rồi \texttt{score\_form\_chinese} cho ra \texttt{prediction\_scored} = "王 遣
+使 如 宋" — dạng dùng để chấm BLEU/chrF++ ở mục 3.6.
+
+\paragraph{Beam search decode nhìn như thế nào.} Để dễ minh hoạ, xét beam size $B=3$ (trong bài dùng $B=3$)
+
+\begin{table}[H]
+\centering\small
+\caption{Minh hoạ hai bước đầu của beam search ($B=3$)}
+\begin{tabular}{clc}
+\toprule
+\textbf{Bước} & \textbf{3 giả thuyết được giữ lại} & \textbf{Log-xác suất cộng dồn} \\
+\midrule
+1 & "王" & $-0{,}10$ \\
+  & "帝" & $-0{,}90$ \\
+  & "上" & $-1{,}20$ \\
+\midrule
+2 & "王 遣" & $-0{,}15$ \\
+  & "王 命" & $-0{,}90$ \\
+  & "帝 遣" & $-1{,}20$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Ở bước 1, mô hình cho ra phân phối xác suất trên toàn bộ từ điển đích cho token đầu
+tiên; ba token có log-xác suất cao nhất được giữ làm 3 giả thuyết ban đầu. Ở bước 2, cả
+ba giả thuyết đều được mở rộng bằng \emph{mọi} token tiếp theo có thể (không chỉ 3 token
+trong bảng — bảng chỉ hiện kết quả sau khi lọc), tạo ra rất nhiều chuỗi ứng viên độ dài
+2; trong số đó, chỉ 3 chuỗi có tổng log-xác suất cộng dồn cao nhất được giữ lại cho bước
+3 — ở đây là "王 遣", "王 命" và "帝 遣", còn mọi mở rộng khác của "上" và các mở rộng kém
+hơn của "帝" bị loại bỏ hoàn toàn dù tại bước 1 "帝" từng lọt vào top-3. Quá trình lặp lại
+như vậy cho đến khi cả 3 giả thuyết sinh token kết thúc câu hoặc chạm giới hạn
+$1{,}2|x|+10$ token; giả thuyết có điểm đã chuẩn hoá độ dài (Công thức~\ref{eq:e1-beam-score})
+cao nhất trong số các giả thuyết đã kết thúc được chọn làm câu dịch cuối cùng — chính là
+dòng \texttt{H-3} ở trên.
+
+\subsection{Thí nghiệm 2 (E2): Qwen3-8B với QLoRA}
+
+\subsubsection{Mô hình ngôn ngữ lớn và Qwen3-8B}
+
+Khác với \texttt{E1} huấn luyện Transformer từ đầu, \texttt{E2} tinh chỉnh một mô hình
+ngôn ngữ lớn đã tiền huấn luyện: \texttt{Qwen3-8B}~\cite{qwenteam2025qwen3}, một mô hình
+\textit{decoder-only} khoảng 8 tỷ tham số. Một LLM decoder-only mô hình hoá xác suất
+chuỗi đích $y$ tự hồi quy, có điều kiện trên chuỗi nhắc $x$:
+\begin{equation}
+  P(y \mid x) = \prod_{t=1}^{T} p\bigl(y_t \mid x,\, y_{<t}\bigr).
+  \label{eq:e2-causal-lm}
+\end{equation}
+$x$ là chuỗi nhắc (system instruction cùng câu nguồn tiếng Việt), $y_{1:T}$ là bản dịch
+Hán văn cổ sinh ra. Mỗi thừa số được tính bằng cách cho tiền tố đi qua các khối
+self-attention xếp chồng với \textit{causal mask}: điểm attention từ vị trí $t$ đến mọi
+vị trí $>t$ bị gán $-\infty$ trước softmax, nên vị trí $t$ chỉ "nhìn thấy" chính nó và
+các vị trí trước.
+
+Lý do chọn tinh chỉnh LLM có sẵn thay vì huấn luyện từ đầu như \texttt{E1}: với
+\texttt{E1}, mọi tri thức ngôn ngữ và dịch thuật phải học hoàn toàn từ 19.218 cặp câu.
+\texttt{Qwen3-8B} đã tiền huấn luyện trên kho ngữ liệu khổng lồ, nhiều khả năng gồm cả
+tiếng Việt, Hán văn hiện đại và một phần Hán văn cổ, nên đã có sẵn hiểu biết đáng kể về
+từ vựng/ngữ pháp/văn phong hai ngôn ngữ trước khi tiếp xúc dữ liệu đề tài. So sánh
+\texttt{E1} với \texttt{E2} là phép kiểm định cho giả thuyết: tri thức tiền huấn luyện
+kết hợp phương pháp tinh chỉnh tiết kiệm tham số có bù đắp được quy mô ngữ liệu song ngữ
+nhỏ hay không.
+
+\subsubsection{LoRA và QLoRA}
+
+Tinh chỉnh toàn bộ 8 tỷ tham số trên chỉ 19.218 câu vừa tốn bộ nhớ vừa dễ overfitting.
+\texttt{E2} dùng LoRA~\cite{hu2021lora}: giữ nguyên (đóng băng) ma trận trọng số
+$W \in \mathbb{R}^{d\times k}$, chỉ học cập nhật hạng thấp $\Delta W = BA$, với
+$B\in\mathbb{R}^{d\times r}$, $A\in\mathbb{R}^{r\times k}$, $r \ll \min(d,k)$:
+\begin{equation}
+  h = Wx + \frac{\alpha}{r}\,BAx.
+  \label{eq:e2-lora}
+\end{equation}
+$r$ (rank) là chiều "cổ chai" của cập nhật, quyết định số tham số mới ($r(d+k)$ thay vì
+$d\times k$); đề tài dùng $r=16$. $\alpha$ là hệ số tỷ lệ cố định tách độ lớn cập nhật
+khỏi giá trị $r$; dùng $\alpha=32$, cho tỷ lệ $\alpha/r=2$. \texttt{target\_modules=all-linear}
+nghĩa là mọi lớp tuyến tính trong các khối Transformer đều được gắn một cặp $(A,B)$
+riêng. Tại khởi tạo $B=0$ nên $\Delta W=0$, mô hình thích ứng ban đầu giống hệt mô hình
+nền; chỉ $A,B$ được huấn luyện.
+
+QLoRA~\cite{dettmers2023qlora} bổ sung lượng tử hoá phần trọng số nền đã đóng băng:
+\textbf{NF4} (4-bit NormalFloat) đặt 16 mức lượng tử tại các phân vị của phân phối chuẩn
+thay vì chia đều, tối ưu cho trọng số có phân phối gần chuẩn; \textbf{double
+quantization} lượng tử hoá thêm chính các hằng số tỷ lệ; \textbf{compute dtype fp16}
+giải lượng tử tức thời chỉ để nhân ma trận; \textbf{paged optimizer}
+(\texttt{paged\_adamw\_8bit}) dùng phân trang bộ nhớ hợp nhất để tránh hết bộ nhớ. Kết
+quả: khoảng 8 tỷ tham số nền chỉ chiếm khoảng một phần tư dung lượng so với fp16, trong
+khi chỉ các ma trận LoRA — một phần rất nhỏ — thực sự được huấn luyện.
+
+\subsubsection{Biểu diễn dữ liệu và hàm mất mát}
+
+Khác \texttt{E1}/\texttt{E3-custom} dùng \texttt{reference\_tokenized} làm đích,
+\texttt{E2} dùng \texttt{reference} (đã detokenize) — mô hình học sinh Hán văn tự nhiên,
+không phải chuỗi cách nhau bởi khoảng trắng. Mỗi mẫu được dựng thành hội thoại hai lượt
+(system instruction + câu nguồn), mã hoá hai lần qua \texttt{apply\_chat\_template} —
+một lần chỉ tiền tố, một lần gồm cả câu trả lời — và khẳng định chuỗi đầy đủ bắt đầu
+đúng bằng chuỗi tiền tố (kiểm tra an toàn chống lệch mask). Nhãn huấn luyện:
+\begin{equation}
+  \text{label}_i =
+  \begin{cases}
+    -100, & i < |P| \\
+    \text{token}_i, & i \ge |P|
+  \end{cases}
+  \label{eq:e2-loss-mask}
+\end{equation}
+với $P$ là chuỗi token tiền tố. Giá trị $-100$ khiến cross-entropy bỏ qua vị trí đó — loss
+chỉ tính trên token bản dịch. Nhiều mẫu hoàn chỉnh được đóng gói (packing) thành cửa sổ
+768 token sau xáo trộn có seed; 19.218 mẫu đóng gói thành 2.903 chuỗi huấn luyện.
+
+\subsubsection{Huấn luyện}
+
+Tối ưu \texttt{paged\_adamw\_8bit}, lr $2\times10^{-4}$, lịch cosine, warmup 0,05,
+weight decay 0,01, grad-norm clip 1,0. Batch hiệu dụng: 1 mẫu/thiết bị $\times$ 16 bước
+tích luỹ gradient, 3 epoch (546 bước), fp16. Checkpoint triển khai là checkpoint có
+\texttt{eval\_loss} thấp nhất, ở bước 400 (khoảng epoch 2,2/3) — không phải cuối huấn
+luyện — được khôi phục (\texttt{load\_best\_model\_at\_end}) trước khi lưu.
+
+\subsubsection{Giải mã}
+
+Beam search với beam $=4$, tất định (\texttt{do\_sample=false}): luôn chọn tiếp tục có
+xác suất tích luỹ cao nhất, không sampling. Số token tối đa thích ứng theo độ dài nguồn:
+$\min(512,\ \lceil 2\times L_{\text{src}}\rceil + 32)$. Chuỗi nhắc khi giải mã dựng lại
+giống hệt lúc huấn luyện, đảm bảo không lệch hình dạng giữa hai giai đoạn.
+
+\subsubsection{Ví dụ minh hoạ toàn bộ quy trình}
+
+\paragraph{Input và chuỗi nhắc.} Với cùng câu ví dụ "Vua sai sứ sang nước Tống" (đích:
+"王遣使如宋", đã detokenize, không khoảng trắng), \texttt{E2} dựng hội thoại hai lượt:
+\begin{quote}\small
+\textbf{system}: Bạn là hệ thống dịch văn bản lịch sử. Hãy dịch câu tiếng Việt sang Hán
+văn cổ. Chỉ trả về bản dịch Hán văn, không giải thích. \\
+\textbf{user}: Dịch sang Hán văn cổ:\newline Vua sai sứ sang nước Tống
+\end{quote}
+Chuỗi này được mã hoá hai lần: \emph{tiền tố} (chỉ system+user, cộng thêm token báo hiệu
+lượt trả lời sắp tới) và \emph{đầy đủ} (tiền tố cộng thêm câu trả lời "王遣使如宋"). Giả
+sử (số minh hoạ) tiền tố mã hoá thành $|P|=38$ token, và chuỗi đầy đủ mã hoá thành 43
+token (5 token còn lại ứng với 5 ký tự bản dịch). Mã nguồn khẳng định
+\texttt{full\_ids[:38] == prefix\_ids} — nếu không đúng (ví dụ do thay đổi chat template
+làm lệch điểm cắt), quá trình huấn luyện dừng ngay thay vì âm thầm tính loss sai vị trí.
+
+\paragraph{Nhãn huấn luyện (loss mask).} Áp dụng Công thức~\ref{eq:e2-loss-mask} với
+$|P|=38$: 38 vị trí đầu (toàn bộ system + user) nhận nhãn $-100$, chỉ 5 vị trí cuối (ứng
+với 5 ký tự "王","遣","使","如","宋") mang token ID thật để tính loss:
+\begin{quote}\small
+\texttt{labels = [-100, -100, ..., -100,} (38 lần)\texttt{, id("王"), id("遣"), id("使"), id("如"), id("宋")]}
+\end{quote}
+Mô hình không bao giờ bị phạt vì "đoán sai" phần chỉ dẫn hệ thống hay câu nguồn — điều
+đó vốn đã cho sẵn, chỉ có 5 token cuối mới đóng góp vào gradient.
+
+\paragraph{LoRA vận hành cụ thể ra sao.} Xét ví dụ số học thu nhỏ (không phải kích thước
+thật của Qwen3-8B) để thấy Công thức~\ref{eq:e2-lora} tính toán thế nào: giả sử một ma
+trận trọng số $W \in \mathbb{R}^{4\times4}$ trong một lớp tuyến tính, hạng $r=2$ (thay vì
+16 thật), và tỷ lệ $\alpha/r = 2$ (giữ đúng tỷ lệ $32/16=2$ của cấu hình thật):
+\[
+W=\begin{pmatrix}1&0&0&1\\0&1&1&0\\1&1&0&0\\0&0&1&1\end{pmatrix},\quad
+A=\begin{pmatrix}1&0&1&0\\0&1&0&1\end{pmatrix},\quad
+B=\begin{pmatrix}1&0\\0&1\\1&1\\0&0\end{pmatrix}.
+\]
+Với đầu vào $x=(1,1,0,0)^\top$: $Wx=(1,1,2,0)^\top$ (phần đóng góp từ mô hình nền, không
+đổi khi huấn luyện). Thay vì nhân trực tiếp $BA$ (ra một ma trận $4\times4$ đầy đủ), LoRA
+tính qua hai bước rẻ hơn nhiều: $Ax=(1,1)^\top$ (chỉ 2 chiều), rồi
+$B(Ax)=(1,1,2,0)^\top$. Nhân với tỷ lệ $\alpha/r=2$:
+$\frac{\alpha}{r}B(Ax) = (2,2,4,0)^\top$. Kết quả cuối:
+\[
+h = Wx + \frac{\alpha}{r}BAx = (1,1,2,0)^\top + (2,2,4,0)^\top = (3,3,6,0)^\top.
+\]
+Điểm mấu chốt về hiệu quả bộ nhớ/tính toán: LoRA không bao giờ cần dựng ma trận $4\times4$
+đầy đủ của $BA$, chỉ cần hai phép nhân nhỏ qua chiều $r$. Ở quy mô thật ($d=k=4096$ chẳng
+hạn, một bậc kích thước hợp lý cho các lớp tuyến tính của một mô hình 8 tỷ tham số), một
+ma trận $W$ đầy đủ có $4096 \times 4096 \approx 16{,}8$ triệu tham số; với $r=16$, cặp
+$A,B$ chỉ cần $16\times(4096+4096) \approx 131$ nghìn tham số — ít hơn khoảng 128 lần.
+Vì \texttt{target\_modules=all-linear} áp dụng điều này cho \emph{mọi} lớp tuyến tính
+trong mạng, mức tiết kiệm này nhân lên trên toàn bộ 8 tỷ tham số nền, giải thích vì sao
+chỉ một phần rất nhỏ thực sự cần huấn luyện và lưu trữ ở độ chính xác cao.
+
+\paragraph{Giải mã.} Với câu nguồn "Vua sai sứ sang nước Tống" giả sử mã hoá thành
+$L_{\text{src}}=9$ token (theo tokenizer của Qwen3), giới hạn sinh token thích ứng là
+$\min(512,\ \lceil 2\times 9\rceil + 32) = \min(512, 50) = 50$ token — đủ rộng cho một
+bản dịch 5 ký tự nhưng không cho phép mô hình sinh tràn lan nếu lặp vòng. Vì
+\texttt{do\_sample=false}, quá trình beam search ở đây hoàn toàn tất định: với cùng một
+checkpoint và cùng một câu nguồn, chạy lại nhiều lần luôn cho ra đúng một kết quả — khác
+với sinh văn bản có \textit{sampling} (nơi mỗi lần chạy có thể ra kết quả khác nhau do
+yếu tố ngẫu nhiên trong việc chọn token).
+
+
+\subsection{Thí nghiệm 3 (E3-custom): Fairseq với truy hồi tri thức nguồn}
+
+Về kiến trúc, hàm mục tiêu, bộ tối ưu và giải mã, \texttt{E3-custom} hoàn toàn giống
+\texttt{E1} (mục 3.3). Khác biệt duy nhất là một can thiệp \textit{chỉ ở tiền xử lý}:
+trước khi mã hóa nhị phân, câu nguồn được bổ sung một danh sách Hán tự gợi ý truy hồi từ
+một từ điển tri thức có cấu trúc.
+
+Cần định vị đúng kỹ thuật này: đây không phải RAG truy hồi đoạn văn bằng embedding, cũng
+không phải fusion bộ nhớ dịch thuật truy hồi nguyên cặp câu. Đây là \textit{truy hồi
+token ứng viên dựa trên từ điển} (lexicon-based candidate-token retrieval) / \textit{chèn
+gợi ý phía nguồn}: truy hồi một danh sách ngắn ký hiệu đơn lẻ (từng Hán tự) bằng một luật
+xếp hạng hoàn toàn xác định, không có embedding hay điểm tương đồng học được — một can
+thiệp thuần dữ liệu, không đổi kiến trúc.
+
+\subsubsection{Xây dựng chỉ mục tri thức}
+
+\texttt{knowledge.json} là từ điển có cấu trúc cho khoảng 16.000 mục Hán/Nôm tự. Với mỗi
+mục, các chuỗi truy vấn tiếng Việt được thu thập từ \texttt{pronunciation},
+\texttt{nom\_query}, \texttt{lookup\_query}, cùng \texttt{query\_variants}; mỗi chuỗi
+chuẩn hoá khoảng trắng, casefold, tách thành bộ token làm khóa cho một chỉ mục
+bộ-token $\rightarrow$ tập Hán tự. Kết quả: \textbf{6.389} dạng truy vấn duy nhất. Song
+song, một bảng tần suất đếm mọi Hán tự đích xuất hiện \textit{chỉ trong tập train} — bắt
+buộc giới hạn ở train để tránh rò rỉ thông tin đánh giá ngược vào truy hồi.
+
+\subsubsection{Quy tắc xếp hạng}
+
+Thuật toán trượt cửa sổ qua mọi cặp (vị trí, độ dài dạng truy vấn) trong câu nguồn. Mỗi
+lần một đoạn token khớp chính xác một dạng truy vấn đã lập chỉ mục (một \textit{hit}),
+mọi Hán tự thuộc tập ứng với dạng đó được cộng 1 điểm. Các ứng viên được xếp hạng theo:
+\begin{equation}
+  \mathrm{rank}(c) = \bigl(-\mathrm{match\_count}(c),\ -\mathrm{train\_frequency}(c),\ c\bigr).
+  \label{eq:e3-rank}
+\end{equation}
+Sắp xếp tăng dần theo bộ ba này tương đương ba tầng ưu tiên: (1) số lần khớp giảm dần;
+(2) khi bằng nhau, tần suất trong tập train giảm dần; (3) khi vẫn bằng nhau, mã Unicode
+của ký tự tăng dần — một tiêu chí phân định cuối cùng đảm bảo toàn quy trình xác định
+tuyệt đối, không ngẫu nhiên.
+
+\subsubsection{Kết xuất vào chuỗi nguồn}
+
+Các ứng viên đã xếp hạng được nối vào câu nguồn, phân cách bằng sentinel
+\texttt{\_\_knowledge\_\_}: câu nguồn cuối = câu gốc + \texttt{\_\_knowledge\_\_} + $K$
+ứng viên hàng đầu, với $K = \min(64, \text{ngân sách vị trí encoder còn lại})$, đảm bảo
+không vượt quá \texttt{max\_source\_positions}=256. Gần như mọi câu bão hòa ở trần 64:
+100\% câu ở cả ba tập được bổ sung gợi ý, trung bình 62 ứng viên/câu từ trung bình
+20--21 đoạn khớp — độ phủ cao nhưng độ chọn lọc thấp.
+
+\subsubsection{Hệ quả đo được và hạn chế}
+
+Việc chèn gợi ý kéo theo hệ quả đo được cụ thể: token nguồn tập train tăng từ 421.215
+lên \textbf{1.622.823}; từ vựng nguồn tăng từ 3.616 lên \textbf{17.264} loại; tham số mô
+hình tăng từ 67.652.608 lên \textbf{74.640.384} (+10,3\%, chỉ ở embedding encoder vì
+\texttt{share\_decoder\_input\_output\_embed} chỉ chia sẻ trọng số decoder).
+
+Trên test, \texttt{E3-custom} đạt BLEU 29,62/chrF++ 31,41 so với 28,63/30,58 của
+\texttt{E1} — $\Delta$BLEU $=+0{,}99$, $[-0{,}14,\ 2{,}16]$, $p=0{,}092$, không có ý
+nghĩa thống kê ở $\alpha=0{,}05$ (thủ tục đầy đủ ở mục 3.7). Quan trọng hơn, so sánh E1
+với E3-custom \textbf{không kiểm soát} chỉ một biến, vì ba lý do đo được: (a) nhiều hơn
+10,3\% tham số; (b) chuỗi nguồn dài hơn 3,9 lần; và (c) — sự thật ở cấp lần chạy, không
+phải khác cấu hình — huấn luyện \texttt{E3-custom} bị \texttt{max\_update}=50.000 cắt
+ngang ở epoch 87, chỉ 10 epoch sau điểm tốt nhất (epoch 77, BLEU validation 31,05),
+khiến \texttt{patience}=20 chưa kịp kích hoạt như ở \texttt{E1} (chạy trọn 171 epoch tới
+hội tụ). Mức tăng $+0{,}99$ BLEU nên đọc là \textit{chưa đo được sạch sẽ}, không phải
+bằng chứng truy hồi không giúp ích.
+
+\subsubsection{Ví dụ minh hoạ toàn bộ quy trình}
+
+\paragraph{Chỉ mục tri thức (rút gọn để minh hoạ).} Giả sử \texttt{knowledge.json} có
+các mục sau liên quan tới câu ví dụ (số liệu minh hoạ, không phải nội dung thật của
+tệp):
+\begin{quote}\small
+"vua" $\to$ \{王\} \quad\quad
+"sai" $\to$ \{使\} \quad\quad
+"sứ" $\to$ \{使\} \quad\quad
+"tống" $\to$ \{宋\} \quad\quad
+"nước tống" $\to$ \{宋\}
+\end{quote}
+Ba dạng truy vấn đầu là dạng một token, hai dạng cuối là "tống" (một token) và "nước
+tống" (hai token) — cùng trỏ tới ký tự 宋, minh hoạ việc một ký tự có thể được truy hồi
+qua nhiều dạng truy vấn khác nhau, dài ngắn khác nhau.
+
+\paragraph{Xếp hạng ứng viên cho câu ví dụ.} Với câu nguồn đã casefold
+\texttt{"vua sai sứ sang nước tống"} (6 token, đánh số vị trí 0--5), thuật toán trượt
+cửa sổ qua mọi (vị trí, độ dài) có trong chỉ mục (ở đây độ dài 1 và 2):
+
+\begin{table}[H]
+\centering\small
+\caption{Các đoạn khớp (hit) khi trượt cửa sổ qua câu ví dụ}
+\begin{tabular}{clc}
+\toprule
+\textbf{Vị trí} & \textbf{Đoạn khớp} & \textbf{Ký tự được cộng điểm} \\
+\midrule
+0 & "vua" & 王 (+1) \\
+1 & "sai" & 使 (+1) \\
+2 & "sứ" & 使 (+1) \\
+4--5 & "nước tống" & 宋 (+1) \\
+5 & "tống" & 宋 (+1) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Vị trí 3 ("sang") không khớp dạng truy vấn nào nên bị bỏ qua. Tổng điểm tích lũy:
+$\mathrm{match\_count}(使)=2$ (từ "sai" và "sứ"), $\mathrm{match\_count}(宋)=2$ (từ
+"tống" và "nước tống"), $\mathrm{match\_count}(王)=1$ (từ "vua") — tổng cộng
+$\mathrm{matched\_spans}=5$.
+
+Áp dụng Công thức~\ref{eq:e3-rank}: 使 và 宋 hoà nhau ở tầng (1) (cùng match\_count=2),
+nên xét tới tầng (2) — tần suất trong tập train. Giả sử (số minh hoạ) 宋 xuất hiện 512
+lần trong tập train, còn 使 xuất hiện 340 lần: 宋 có tần suất cao hơn nên xếp trước 使 dù
+match\_count bằng nhau. 王 xếp cuối vì match\_count thấp hơn (1). Kết quả xếp hạng cuối
+cùng: $[宋,\ 使,\ 王]$.
+
+\paragraph{Kết xuất vào chuỗi nguồn.} Với ngân sách còn đủ chỗ (giả sử cả 3 ứng viên đều
+nằm trong 64 slot cho phép), câu nguồn được kết xuất thành:
+\begin{quote}\small
+\texttt{vua sai sứ sang nước tống \_\_knowledge\_\_ 宋 使 王}
+\end{quote}
+Đây chính là chuỗi được ghi vào \texttt{text/train.vi} rồi đưa qua \texttt{fairseq-preprocess}
+(mục 3.3) — từ góc nhìn của Fairseq, ba ký tự Hán \texttt{宋 使 王} chỉ là các token phụ
+nối thêm vào cuối câu nguồn, không có gì đặc biệt hơn phần câu nguồn gốc.
+
+\paragraph{Nhận xét về độ phủ.} Đáng chú ý: trong 3 ký tự được gợi ý (宋, 使, 王), cả 3
+đều thực sự xuất hiện trong bản dịch đúng "王 遣 使 如 宋" — nghĩa là ở ví dụ này, retrieval
+tìm đúng 3/5 ký tự đích (thiếu 遣 và 如, hai ký tự không có dạng truy vấn nào được lập chỉ
+mục khớp với câu nguồn). Đây là minh hoạ trực quan cho tính chất "độ phủ cao nhưng không
+toàn phần" đã nêu ở phần "Hệ quả đo được và hạn chế": mô hình được cho một shortlist có
+ích nhưng không đầy đủ, vẫn phải tự suy ra phần còn lại (như 遣, 如) từ chính khả năng
+sinh ngôn ngữ của nó, không phải từ gợi ý truy hồi.
+
+
+\subsection{Chỉ số đánh giá}
+
+Chất lượng bản dịch đo bằng hai chỉ số cấp corpus bổ trợ nhau: BLEU~\cite{papineni2002bleu}
+và chrF++~\cite{popovic2015chrf,popovic2017chrfpp}, tính bằng \texttt{sacrebleu} với
+signature cố định để tái lập chính xác.
+
+\subsubsection{Chuẩn hoá trước khi chấm điểm}
+
+Trước khi chấm điểm, câu dự đoán và tham chiếu đi qua \texttt{score\_form\_chinese}:
+ghép thành văn bản liền mạch, tách lại từng ký tự Unicode, nối bằng một khoảng trắng —
+ép mọi đầu vào về cùng dạng chuẩn (một Hán tự = một token). Cần thiết vì \texttt{E1}/
+\texttt{E3-custom} sinh Hán văn tách sẵn theo ký tự còn \texttt{E2} sinh Hán văn tự
+nhiên không khoảng trắng; phép biến đổi này đã được kiểm chứng không mất thông tin trên
+toàn bộ 20.238 dòng.
+
+\subsubsection{BLEU}
+
+\begin{equation}
+  p_n = \frac{\sum_{\text{n-gram}} \min\bigl(\text{Count}_{\text{hyp}}(\text{n-gram}),\ \text{Count}_{\text{ref}}(\text{n-gram})\bigr)}{\sum_{\text{n-gram}}
+\text{Count}_{\text{hyp}}(\text{n-gram})}.
+  \label{eq:bleu-precision}
+\end{equation}
+Số lần khớp bị cắt trần ở số lần xuất hiện nhiều nhất trong tham chiếu, tránh lặp một
+ký tự đúng nhiều lần để đẩy precision giả tạo.
+\begin{equation}
+  BP =
+  \begin{cases}
+    1 & \text{nếu } c > r \\
+    \exp\!\left(1 - \dfrac{r}{c}\right) & \text{nếu } c \le r
+  \end{cases}
+  \label{eq:bleu-bp}
+\end{equation}
+với $c$, $r$ là tổng độ dài dự đoán/tham chiếu toàn corpus.
+\begin{equation}
+  \text{BLEU} = BP \cdot \exp\!\left(\sum_{n=1}^{4} w_n \log p_n\right),\quad w_n=\tfrac14.
+  \label{eq:bleu-final}
+\end{equation}
+Cấu hình: \texttt{lowercase=False}, \texttt{tokenize="13a"}, \texttt{smooth\_method="exp"}
+(làm mượt khi $p_n=0$ để tránh $\log p_n \to -\infty$), \texttt{effective\_order=False}.
+
+\textbf{Lưu ý}: vì đầu vào đã tách sẵn một ký tự một token trước khi vào
+\texttt{sacrebleu}, \texttt{tokenize="13a"} trở thành no-op — BLEU ở đây thực chất đo
+n-gram \textbf{cấp ký tự}, không phải cấp từ như cách hiểu thông thường; không nên so
+sánh trực tiếp với BLEU cấp từ của các cặp ngôn ngữ khác.
+
+\subsubsection{chrF++}
+
+\begin{equation}
+  chrP = \frac{\text{n-gram ký tự khớp}}{\text{n-gram ký tự trong dự đoán}}, \qquad
+  chrR = \frac{\text{n-gram ký tự khớp}}{\text{n-gram ký tự trong tham chiếu}},
+  \label{eq:chrf-pr}
+\end{equation}
+\begin{equation}
+  \text{chrF}_\beta = (1+\beta^2)\cdot \frac{chrP \cdot chrR}{\beta^2 \cdot chrP + chrR}.
+  \label{eq:chrf-final}
+\end{equation}
+$\beta=2$: recall được coi trọng gấp đôi precision. \texttt{char\_order=6}: n-gram ký tự
+bậc 1--6. \texttt{word\_order=2} là phần mở rộng chrF++ (n-gram cấp từ bậc 1--2), nhưng
+\textbf{vì văn bản đã tách sẵn một ký tự một token}, cơ chế tách "từ" theo khoảng trắng
+của \texttt{sacrebleu} coi mỗi ký tự là một "từ" — \texttt{word\_order=2} ở đây thực chất
+tính lại bigram \textbf{cấp ký tự} một lần nữa, không phải bigram cấp từ thật.
+\texttt{whitespace=False}, \texttt{lowercase=False}.
+
+\subsubsection{Diễn giải thang điểm cho các chỉ số}
+
+Một thang diễn giải BLEU thường được trích dẫn trong cộng đồng dịch máy (ví dụ, tài
+liệu của Google Cloud Translation) là:
+
+\begin{table}[H]
+\centering\small
+\caption{Thang diễn giải BLEU phổ biến (tính trên n-gram \textbf{cấp từ}, cặp ngôn ngữ
+giàu tài nguyên)}
+\begin{tabular}{cl}
+\toprule
+\textbf{Điểm BLEU} & \textbf{Chất lượng} \\
+\midrule
+$<10$ & Gần như vô dụng \\
+10--19 & Khó nắm được ý chính \\
+20--29 & Ý chính rõ nhưng còn lỗi ngữ pháp đáng kể \\
+30--40 & Có thể hiểu được đến khá tốt \\
+40--50 & Chất lượng cao \\
+50--60 & Chất lượng rất cao, trôi chảy \\
+$>60$ & Thường được đánh giá tốt hơn cả bản dịch của con người \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Cảnh báo quan trọng — không áp trực tiếp thang này vào bài}: thang trên được xây
+dựng trên BLEU tính n-gram \textbf{cấp từ}, thường trên các cặp ngôn ngữ giàu tài nguyên
+với văn bản đã tách từ theo nghĩa thông thường (ví dụ Anh--Pháp). Như đã nêu ở phần BLEU
+phía trên, điểm số trong đề tài này là BLEU \textbf{cấp ký tự}. Về bản chất thống kê, so
+khớp n-gram cấp ký tự dễ "trúng ngẫu nhiên" hơn nhiều so với so khớp n-gram cấp từ — một
+ký tự Hán đơn lẻ trùng nhau có xác suất xảy ra ngẫu nhiên cao hơn hẳn một từ trọn vẹn
+trùng nhau — nên BLEU cấp ký tự thường cho điểm số cao hơn một cách hệ thống so với BLEU
+cấp từ ở cùng một mức chất lượng dịch thực tế. Vì vậy, điểm BLEU $28$--$41$ của các hệ
+thống trong đề tài \textbf{không thể} tra thẳng vào bảng trên để suy ra "chất lượng
+tương đương $28$--$41$ điểm BLEU cấp từ" — làm vậy sẽ đánh giá sai lệch (có thể lạc quan
+quá mức) chất lượng dịch thực tế.
+
+chrF++ cũng không có một thang diễn giải tuyệt đối được thống nhất rộng rãi như BLEU;
+thực hành phổ biến chỉ xem chrF trong khoảng $40$--$60$ là "chấp nhận được" ở mức tổng
+quát cho nhiều cặp ngôn ngữ, nhưng con số này cũng được đo ở mức từ/ký tự hỗn hợp thông
+thường, không phải chế độ thuần ký tự như ở đây.
+
+\textbf{Cách diễn giải đúng cho đề tài này}: vì không có một điểm neo tuyệt đối đáng tin
+cậy để so sánh chéo giữa các chế độ tính khác nhau, cách diễn giải có ý nghĩa nhất là so
+sánh \emph{tương đối} giữa ba hệ thống trên \emph{cùng} một chế độ tính (đúng những gì
+mục 3.7 làm): E2 đạt BLEU/chrF++ cao hơn rõ rệt và có ý nghĩa thống kê so với cả E1 lẫn
+E3-custom (Δ dương, khoảng tin cậy không chứa 0, $p=0{,}002$); còn chênh lệch giữa
+E3-custom và E1 tuy điểm tuyệt đối cao hơn nhưng không đủ ý nghĩa thống kê. Nói cách
+khác, thứ tự xếp hạng giữa ba hệ thống đáng tin hơn nhiều so với việc gán nhãn "tốt" hay
+"xấu" cho một con số BLEU/chrF++ đơn lẻ tách khỏi ngữ cảnh so sánh nội bộ của đề tài.
+
+\subsection{Kiểm định ý nghĩa thống kê}
+
+Một điểm BLEU/chrF++ trên toàn tập test chỉ là một ước lượng điểm; vì đây là đại lượng
+tổng hợp phi tuyến trên corpus, độ biến thiên lấy mẫu không có công thức giải tích đóng.
+Quan sát "hệ thống B cao hơn A 0,99 điểm" chưa đủ để khẳng định đó là khác biệt thật hay
+chỉ ngẫu nhiên do 510 câu cụ thể của tập test này.
+
+\subsubsection*{Bootstrap và vì sao phải bắt cặp}
+
+Từ tập test $n=510$ câu, lặp $B$ lần lấy mẫu ngẫu nhiên có hoàn lại để tạo $B$ tập test
+giả lập, tính lại metric trên mỗi tập. Đề tài dùng \textit{paired
+bootstrap}~\cite{koehn2004bootstrap}: mỗi lần lặp $b$ chỉ rút một bộ chỉ số câu, áp dụng
+\textbf{cùng} bộ đó cho cả hai hệ thống:
+\begin{equation}
+  \Delta_b = \text{metric}(\text{candidate}_b) - \text{metric}(\text{baseline}_b),
+  \qquad b = 1, \dots, B.
+  \label{eq:bootstrap-delta}
+\end{equation}
+Nếu resample độc lập, mỗi $\Delta_b$ trộn lẫn khác biệt chất lượng thật sự và nhiễu do
+câu dễ/khó rơi lệch giữa hai tập resample. Dùng chung một bộ chỉ số mỗi lần lặp khiến
+nhiễu do độ khó câu triệt tiêu, chỉ còn lại chênh lệch hệ thống mang tính hệ thống.
+
+Lấy ví dụ như: để dễ hình dung, giả sử tập test chỉ có $n=5$ câu (đánh số 1--5) thay vì
+510 câu thật. Ở lần lặp $b=1$, bộ chỉ số được rút ngẫu nhiên có hoàn lại là
+$[2,2,5,1,3]$ — chú ý câu số 2 xuất hiện hai lần, còn câu số 4 không được chọn lần nào,
+đúng bản chất "có hoàn lại" của bootstrap. Cả hai hệ thống baseline và candidate đều
+dùng \emph{đúng} bộ chỉ số $[2,2,5,1,3]$ này để dựng lại corpus giả lập của mình (lấy
+đúng các dòng dự đoán số 2, 2, 5, 1, 3 theo thứ tự đó từ mỗi hệ thống) — đây chính là
+điểm "paired": nếu baseline dùng $[2,2,5,1,3]$ mà candidate lại dùng một bộ chỉ số khác
+độc lập, phần chênh lệch đo được sẽ lẫn cả nhiễu do hai hệ thống không được so trên cùng
+tập câu. Tính lại BLEU trên corpus giả lập 5 câu này cho mỗi hệ thống, giả sử ra
+$\text{baseline}_1 = 26{,}8$ và $\text{candidate}_1 = 29{,}5$, ta được $\Delta_1 = +2{,}7$.
+Lặp lại toàn bộ quy trình này $B=1.000$ lần (với $n=510$ câu thật) cho ra 1.000 giá trị
+$\Delta_1, \dots, \Delta_{1.000}$.
+
+\subsubsection*{Khoảng tin cậy và p-value}
+
+$B=1.000$, seed cố định 42. Khoảng tin cậy 95\% là khoảng phân vị $[2,5\%,\,97,5\%]$
+của $\{\Delta_b\}$:
+\begin{equation}
+  p = \min\!\left(1,\; 2 \cdot \min\!\left(
+    \frac{\#\{b : \Delta_b \le 0\} + 1}{B + 1},\;
+    \frac{\#\{b : \Delta_b \ge 0\} + 1}{B + 1}
+  \right)\right).
+  \label{eq:bootstrap-pvalue}
+\end{equation}
+Số hạng "+1" là làm trơn Laplace, đảm bảo $p$ không bao giờ báo cáo chính xác bằng 0 dù
+$B$ hữu hạn.
+
+Lấy ví dụ như: sau khi có đủ 1.000 giá trị $\Delta_b$, sắp xếp chúng tăng dần. Cận dưới
+của khoảng tin cậy 95\% là phần tử thứ $\lfloor 0{,}025 \times 999 \rfloor + 1 = 25$
+trong dãy đã sắp xếp, cận trên là phần tử thứ $\lfloor 0{,}975 \times 999 \rfloor + 1 = 975$
+— chính là công thức tính khoảng phân vị đã dùng để ra các khoảng tin cậy ở bảng kết quả
+bên dưới. Về p-value: với so sánh E3-custom $-$ E1, giả sử trong 1.000 lần resample có
+đúng 45 lần $\Delta_b \le 0$ (tức phần lớn các lần resample cho thấy E3-custom vẫn nhỉnh
+hơn E1, nhưng không phải luôn luôn — một số lần resample cho kết quả ngược lại) và do đó
+955 lần $\Delta_b \ge 0$. Áp dụng công thức~\ref{eq:bootstrap-pvalue}:
+\begin{equation*}
+  p = \min\!\left(1,\ 2 \cdot \min\!\left(\frac{45+1}{1.000+1},\ \frac{955+1}{1.000+1}\right)\right)
+    = \min\!\left(1,\ 2 \times 0{,}0459\right) \approx 0{,}092,
+\end{equation*}
+khớp đúng với giá trị $p=0{,}092$ đã báo cáo cho $\Delta$BLEU của E3-custom $-$ E1 ở bảng
+dưới đây — minh hoạ rằng con số 0,092 không phải lấy từ đâu ra mà chính là kết quả của
+đúng phép đếm tỷ lệ đuôi này trên 1.000 lần resample thực tế.
+
+\subsubsection*{Kết quả trên tập test}
+
+\begin{itemize}
+  \item \textbf{E2 $-$ E1}: $\Delta$BLEU $= +12,14$ $[10,22,\ 13,77]$, $p = 0,002$;
+    $\Delta$chrF++ $= +10,29$ $[9,03,\ 11,79]$, $p = 0,002$.
+  \item \textbf{E3-custom $-$ E1}: $\Delta$BLEU $= +0,99$ $[-0,14,\ 2,16]$, $p = 0,092$;
+    $\Delta$chrF++ $= +0,83$ $[-0,06,\ 1,71]$, $p = 0,064$.
+  \item \textbf{E2 $-$ E3-custom}: $\Delta$BLEU $= +11,15$ $[9,26,\ 12,77]$, $p = 0,002$;
+    $\Delta$chrF++ $= +9,46$ $[8,05,\ 10,88]$, $p = 0,002$.
+\end{itemize}
+
+Lợi thế của E2 lớn và vững chắc về thống kê. Ở E3-custom$-$E1, cả hai khoảng tin cậy đều
+bắc qua 0 — không có ý nghĩa thống kê ở $\alpha=0,05$, dù điểm ước lượng dương. Kết hợp
+với các yếu tố gây nhiễu khác giữa E1 và E3-custom đã nêu ở mục 3.5, mức tăng $+0,99$
+BLEU của retrieval nên được hiểu là \textit{chưa đo được một cách sạch sẽ}, không phải
+bằng chứng cho thấy retrieval không mang lại lợi ích.
+
+% Phần này mô tả ba thí nghiệm dịch máy Việt--Hán được xây dựng trên ngữ liệu
+% \emph{Đại Việt sử ký toàn thư}: \texttt{E1} là mô hình Transformer huấn luyện
+% từ đầu bằng toolkit Fairseq của Meta; \texttt{E2} là mô hình Qwen3-8B được tinh chỉnh
+% bằng QLoRA; và \texttt{E3-custom} là biến thể của \texttt{E1}, trong đó câu
+% nguồn tiếng Việt được bổ sung các gợi ý Hán tự có từ một cơ sở tri thức
+% ngoài được cho trước. Ba thí nghiệm dùng chung tập câu song ngữ và chung cách chấm điểm,
+% nhưng khác nhau ở biểu diễn đầu vào, kiến trúc mô hình, hàm mục tiêu, tiêu chí
+% chọn checkpoint và cấu hình giải mã.
+
+% Bảng~\ref{tab:comparison-scope} nêu rõ những yếu tố được giữ cố định và những
+% yếu tố thay đổi giữa các hệ thống. Nhờ vậy, phần Kết quả có thể diễn giải hiệu
+% năng của \emph{toàn bộ quy trình} ở mỗi thí nghiệm mà không quy kết nhân quả
+% vượt quá phạm vi mà thiết kế cho phép.
+
+% \subsection{Dữ liệu và cách tiền xử lí trước khi đưa vào pipeline}
+% Trước khi dữ liệu song ngữ Việt--Hán văn cổ được đưa vào bất kỳ thí nghiệm nào, toàn bộ
+% ba phân hoạch (train, validation, test) đều đi qua một tầng tiền xử lý dùng chung, gồm
+% ba thành phần: (i) một bước \textit{chuẩn hoá văn bản} áp dụng đồng nhất cho cả hai phía
+% input/label; (ii) một bước \textit{đọc và kiểm tra toàn vẹn dữ liệu} chịu trách nhiệm gán
+% định danh mẫu và kiểm tra xem có sự chênh lệch nào giữa số dòng input và số dòng label không; và (iii) một tầng \textit{biểu diễn văn bản đích dưới nhiều dạng} phục vụ ba mục đích khác nhau: huấn luyện, hiển thị, và
+% chấm điểm. Tầng tiền xử lý này được cài đặt trong \texttt{code/mt\_pipeline/normalize.py}
+% và \texttt{code/mt\_pipeline/data.py}, và là điểm khởi đầu chung cho cả ba thí nghiệm E1,
+% E2 và E3-custom trước khi mỗi thí nghiệm rẽ theo hướng chuẩn bị dữ liệu riêng của mình.
+% \subsubsection{Chuẩn hoá văn bản}
+% Hàm \texttt{normalize\_whitespace} được áp dụng cho cả câu input tiếng Việt lẫn câu label
+% Hán văn ngay khi đọc dữ liệu:
+% \begin{equation}
+%   \texttt{normalize\_whitespace}(s) = \mathrm{strip}\Big(\mathrm{collapse}_{\backslash s+ \to \text{"~"}}\big(\mathrm{NFC}(s)\big)\Big),
+%   \label{eq:normalize-whitespace}
+% \end{equation}
+% trong đó $s$ là chuỗi văn bản thô đọc từ tệp corpus, $\mathrm{NFC}(\cdot)$ là phép chuẩn
+% hoá Unicode theo dạng \textit{Normalization Form Canonical Composition},
+% $\mathrm{collapse}_{\backslash s+ \to \text{"~"}}(\cdot)$ là phép thay thế mọi chuỗi
+% khoảng trắng liên tiếp bằng đúng một dấu cách, và $\mathrm{strip}(\cdot)$ là phép cắt bỏ
+% khoảng trắng thừa ở hai đầu chuỗi. Bước NFC là cần thiết vì tiếng Việt có dấu thanh và
+% dấu phụ có thể được mã hoá theo hai cách tương đương nhưng khác biểu diễn byte: dạng
+% \textit{dựng sẵn} và dạng \textit{tổ hợp}; nếu không ép về cùng một dạng, hai câu nhìn
+% giống hệt nhau có thể bị xem là khác nhau khi so khớp chuỗi. Việc gộp khoảng trắng đảm
+% bảo ranh giới token luôn nhất quán bất kể tệp gốc chứa tab, xuống dòng thừa hay nhiều
+% dấu cách liên tiếp.
+
+% Lấy ví dụ như: 
+
+% \subsubsection{Đọc và kiểm tra tính toàn vẹn của dữ liệu}
+
+% Hàm \texttt{read\_split} (\texttt{data.py}) là điểm đọc dữ liệu duy nhất của toàn bộ
+% pipeline. Với mỗi phân hoạch (train, validation, test), hàm này: đọc đồng thời hai tệp input và label; 
+% bắt buộc dừng việc chạy 
+% chương trình nếu số dòng hai phía không bằng nhau; buộc dừng chương trình nếu số dòng
+% đọc được khác với số dòng kỳ vọng \texttt{expected\_lines} khai báo trong cấu hình dữ
+% liệu; gán cho mỗi cặp câu một định danh duy nhất theo quy tắc
+% $\texttt{sample\_id} = \texttt{f"\{split\}-\{index:06d\}"}$; và áp dụng phép chuẩn hoá ở
+% Công thức~\ref{eq:normalize-whitespace} cho cả hai phía. Hai điều kiện dừng này
+% đóng vai trò guardrail về tính toàn vẹn dữ liệu, đảm bảo một tệp corpus bị hoán đổi nhầm hoặc bị
+% cắt xén không thể lọt vào một lượt chạy thực nghiệm mà không bị phát hiện ngay từ bước
+% đọc dữ liệu đầu tiên.
+
+% Lấy ví dụ như: 
+
+% \subsubsection{Ba dạng biểu diễn của câu đích}
+
+% Vì phía Hán văn được cung cấp sẵn dưới dạng tách ký tự, mỗi dòng dữ liệu đích cần được
+% biểu diễn dưới ba dạng khác nhau tuỳ mục đích sử dụng:
+
+% \begin{table}[htbp]
+%     \centering
+%     \small
+%     \caption{Ba dạng biểu diễn của câu đích Hán văn}
+%     \label{tab:three-text-forms}
+%     \begin{tabular}{lll}
+%         \toprule
+%         \textbf{Dạng} & \textbf{Định nghĩa} & \textbf{Dùng cho} \\
+%         \midrule
+%         \texttt{reference\_tokenized} & dòng gốc đã chuẩn hoá khoảng trắng & mục tiêu huấn luyện/đánh giá của Fairseq \\
+%         \texttt{reference} & \texttt{detokenize\_chinese}: nối ký tự, bỏ khoảng trắng & câu tham chiếu người đọc; mục tiêu huấn luyện của E2 \\
+%         \texttt{reference\_scored} & \texttt{score\_form\_chinese}: tách lại từng ký tự, nối bằng một dấu cách & đầu vào chấm điểm BLEU/chrF++ \\
+%         \bottomrule
+%     \end{tabular}
+% \end{table}
+
+% Về mặt hình thức, $\texttt{reference} = \mathrm{join}_{\varnothing}(\texttt{reference\_tokenized})$,
+% còn $\texttt{reference\_scored} = \mathrm{join}_{\text{"~"}}\big(\mathrm{split}_{\text{codepoint}}(\texttt{reference})\big)$
+% — tức \texttt{reference\_scored} là một phép tách--gộp--tách lại đi qua dạng không
+% khoảng trắng. Phép round-trip này chỉ không mất thông tin khi mọi token gốc trong corpus
+% đúng là một codepoint duy nhất; điều kiện này đã được xác minh thực nghiệm trên toàn bộ
+% 20.238 dòng của cả ba phân hoạch, không có ngoại lệ. Việc tách riêng ba dạng biểu diễn
+% này là điều kiện cần để các chỉ số đánh giá (mục 3.6) được định nghĩa nhất quán giữa các
+% thí nghiệm có định dạng đầu ra khác nhau.
+
+% \subsubsection{Phương pháp tokenization}
+
+% Toàn bộ đường dẫn tới ngữ liệu được khai báo trong
+% \texttt{configs/dataset.yaml}. Mỗi split khai báo hai file song song, nhãn
+% chất lượng và số dòng kỳ vọng (\texttt{expected\_lines}): 19.218 cặp câu
+% \emph{silver} được căn tự động cho train; 510 cặp \emph{gold} căn thủ công cho
+% validation; và 510 cặp \emph{gold} cho test. Chúng ta sử dụng hàm \texttt{read\_split} để đưa các file này vào pipeline: hàm kiểm tra hai vế có cùng số
+% dòng, đối chiếu số dòng với cấu hình, gán ID ổn định theo thứ tự gốc, đồng
+% thời chuẩn hoá Unicode về dạng NFC (Normalization Form Canonical Composition) và chuẩn hoá khoảng trắng.
+
+
+% Trong bước phân tích sơ bộ về dữ liệu, nhóm nhận thấy đang có 1596 cặp trùng lặp (trùng lặp ở đây có nghĩa là vừa trùng cả cặp câu tiếng việt và cả tiếng trung), Ví dụ:
+
+% - Dòng 1: ("Vua sai sứ sang Tống", "帝遣使如宋")
+
+% - Dòng 2: ("Vua sai sứ sang Tống", "帝遣使如宋")
+
+% Có thể thấy dòng 2 là một lần trùng lặp. Con số 1.596 nghĩa là tập train có 1.596 lượt xuất hiện dư thừa so với tập các cặp duy nhất.
+
+% Ngoài ra trong quá trình phân tích sơ bộ, nhóm cũng nhận thấy có 44 câu nguồn ứng với nhiều câu đích khác nhau, cụ thể hơn là các câu nguồn giống nhau nhưng lại có 2 câu đích khác nhau, điều này có thể xuất phát từ việc có nhiều cách dịch hợp lệ, khác biệt ề cách diễn đạt hoặc có lỗi thật sự trong việc căn chỉnh dữ liệu, ví dụ như: 
+
+% - Dòng 1: ("Vua sai sứ sang Tống", "帝遣使如宋")
+  
+% - Dòng 2: ("Vua sai sứ sang Tống", "王遣使於宋")
+
+
+% Pipeline không hạ chữ thường, không lọc theo độ dài, không sửa ký tự lỗi và
+% không loại trùng lặp. Kết quả rà soát cho thấy corpus chứa 1.596 cặp trùng
+% lặp, 44 câu nguồn ứng với nhiều câu đích khác nhau, và sáu dòng đích trong tập
+% train có chứa ký tự U+FFFD. Việc giữ nguyên bảo toàn đúng ngữ liệu được cung
+% cấp và khả năng đối chiếu ngược; đổi lại, các cặp trùng lặp làm lệch trọng số
+% thực nghiệm của một số mẫu, còn ánh xạ một--nhiều đặt ra giới hạn cho mọi phép
+% so khớp chính xác. Chuẩn hoá NFC là ngoại lệ cần thiết, vì cùng một dấu tiếng
+% Việt có thể được biểu diễn bằng nhiều chuỗi codepoint khác nhau.
+% \subsubsection{Ba dạng biểu diễn của câu đích}
+
+% \begin{table}[tbp]
+%   \centering
+%   \small
+%   \renewcommand{\arraystretch}{1.18}
+%   \caption{Ba dạng biểu diễn của cùng một câu đích; ví dụ mang tính minh hoạ.}
+%   \label{tab:target-forms}
+%   \begin{tabularx}{\textwidth}{@{}>{\ttfamily}p{3.3cm}p{4.2cm}X@{}}
+%     \toprule
+%     \normalfont\textbf{Trường} & \textbf{Dạng minh hoạ} & \textbf{Vai trò} \\
+%     \midrule
+%     reference\_\allowbreak tokenized & \texttt{$c_1$ $c_2$ $c_3$ $\ldots$}
+%       & Dạng của corpus sau chuẩn hoá NFC; là câu đích khi huấn luyện
+%         \texttt{E1} và \texttt{E3-custom} \\
+%     reference & \texttt{$c_1c_2c_3\ldots$}
+%       & Bỏ khoảng trắng; là câu đích tự nhiên cho \texttt{E2}, đồng thời là
+%         dạng dễ đọc với người \\
+%     reference\_scored & \texttt{$c_1$ $c_2$ $c_3$ $\ldots$}
+%       & Mỗi token là một codepoint; là đầu vào duy nhất của bộ chấm điểm \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+% Hàm \texttt{score\_form\_chinese} bỏ toàn bộ khoảng trắng rồi tách lại theo
+% từng codepoint. Tính chất ``mỗi token Hán tự là một codepoint'' đã được kiểm
+% tra trên toàn bộ 20.238 dòng, nên phép biến đổi này không làm thay đổi câu
+% tham chiếu mà chỉ đưa output của cả ba hệ thống về cùng một quy ước.
+
+% \begin{figure}[tbp]
+%   \centering
+%   \begin{tikzpicture}[
+%       font=\footnotesize,node distance=7mm and 8mm,
+%       box/.style={draw,rounded corners,align=center,text width=39mm,
+%                   minimum height=12mm,inner sep=2mm},
+%       outputbox/.style={draw,rounded corners,align=center,text width=38mm,
+%                        minimum height=10mm,fill=blue!7},
+%       arr/.style={-{Latex[length=1.8mm]},thick}]
+%     \node[box] (row) {\textbf{ParallelRow}\\
+%       ID: \texttt{test-000042}\\nguồn: $v_1\ v_2\ldots v_n$\\
+%       đích: $c_1\ c_2\ldots c_m$};
+%     \node[box,below=9mm of row] (e3) {\textbf{E3-custom}\\nguồn + sentinel\\$+h_1\ldots h_k$};
+%     \node[box,left=of e3] (e1) {\textbf{E1}\\nguồn giữ nguyên\\đích tách theo ký tự};
+%     \node[box,right=of e3] (e2) {\textbf{E2}\\lượt system/user\\assistant: $c_1c_2\ldots c_m$};
+%     \node[outputbox,below=9mm of e3] (pred) {Prediction riêng của từng backend};
+%     \node[outputbox,below=of pred] (canon) {$\hat c_1\ \hat c_2\ldots$\\dạng chuẩn để chấm điểm};
+%     \draw[arr] (row)--(e1); \draw[arr] (row)--(e3); \draw[arr] (row)--(e2);
+%     \draw[arr] (e1.south)--++(0,-3mm)-|(pred.west);
+%     \draw[arr] (e3)--(pred);
+%     \draw[arr] (e2.south)--++(0,-3mm)-|(pred.east);
+%     \draw[arr] (pred)--(canon);
+%   \end{tikzpicture}
+%   \caption{Một dòng dữ liệu minh hoạ đi qua ba cách render rồi quy về cùng một
+%   dạng chấm điểm. Ví dụ được lược hoá để không tiết lộ câu thật trong corpus
+%   hạn chế.}
+%   \label{fig:render-contract}
+% \end{figure}
+% \subsection{Tổng quan về pipeline}
+% Ba thí nghiệm mà nhóm sẽ thực hiện này dùng chung một khâu đọc dữ liệu và một khâu chấm điểm đối với các đầu ra của từng thí nghiệm.
+% Hình~\ref{fig:pipeline} thể hiện phần đầu và phần cuối dùng chung, cùng ba quy
+% trình không đồng nhất ở giữa.
+% \begin{table}[H]
+%   \centering
+%   \small
+%   \renewcommand{\arraystretch}{1.18}
+%   \caption{Những điểm giống và khác nhau giữa ba hệ thống.}
+%   \label{tab:comparison-scope}
+%   \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{3.0cm}XX@{}}
+%     \toprule
+%     Trục so sánh & Giữ cố định & Khác nhau giữa các hệ thống \\
+%     \midrule
+%     Dữ liệu
+%       & Cùng một tập dữ liệu đã được chia sẵn thành train, validation và test
+%       & \texttt{E3-custom} bổ sung gợi ý theo hướng terminology injection;
+%         \texttt{E2} dùng prompt được thiết kế riêng cho nhiệm vụ dịch câu \\
+%     Tiền xử lý
+%       & Cùng hàm \texttt{read\_split}, cùng chuẩn hoá NFC và cùng bước kiểm
+%         tra số dòng
+%       & Binarization của Fairseq so với tokenizer và chat template của Qwen3 \\
+%     Mô hình và mục tiêu
+%       & Cùng hướng dịch Việt $\rightarrow$ Hán văn
+%       & Seq2seq huấn luyện từ đầu; causal LM tinh chỉnh bằng QLoRA; seq2seq
+%         với câu nguồn đã được bổ sung gợi ý \\
+%     Chọn mô hình
+%       & Chỉ dùng tập validation trước khi mở tập test
+%       & \texttt{E1}/\texttt{E3-custom} chọn theo BLEU; \texttt{E2} chọn theo
+%         \texttt{eval\_loss} \\
+%     Giải mã
+%       & Không dùng sampling; cấu hình giải mã được ghi vào artifact
+%       & Beam 7 cho \texttt{E1}/\texttt{E3-custom}, beam 4 cho \texttt{E2};
+%         giới hạn độ dài khác nhau \\
+%     Đánh giá
+%       & Cùng dạng chuẩn hoá, cùng bộ metric, cùng 510 mẫu và cùng paired
+%         bootstrap
+%       & Không còn khác biệt nào sau trường \texttt{prediction\_scored} \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+%   \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=\linewidth]{img/mt_pipeline.png}
+%     \caption{Tổng quan pipeline}
+%     \label{fig:pipeline}
+%   \end{figure}
+% \subsection{Thí nghiệm 1 (E1): Transformer huấn luyện từ đầu}
+% \subsubsection{Về kiến trúc Transformer và ảnh hưởng của nó lên các bài dịch máy}
+% \subsubsection{Fairseq}
+% \subsubsection{Hàm mục tiêu}
+% \subsubsection{Decode}
+% \texttt{E1} sử dụng kiến trúc Transformer encoder--decoder tiêu
+% chuẩn~\cite{vaswani2017attention}, triển khai bằng
+% Fairseq~\cite{ott2019fairseq} toolkit của Meta. 
+
+% Fairseq là một thư viện mã nguồn mở được xây dựng trên PyTorch để phát triển
+% các mô hình xử lý chuỗi, đặc biệt cho dịch máy, tóm tắt văn bản và mô hình ngôn
+% ngữ~\cite{ott2019fairseq}. Thư viện cung cấp một quy trình thống nhất gồm xây
+% dựng dictionary, chuyển corpus sang định dạng nhị phân, huấn luyện mô hình,
+% quản lý checkpoint và sinh chuỗi bằng các thuật toán như beam search. Fairseq
+% cũng hỗ trợ batch theo số lượng token, huấn luyện hỗn hợp độ chính xác và tích
+% lũy gradient, nhờ đó có thể huấn luyện mô hình dịch máy trong điều kiện bộ nhớ
+% GPU giới hạn.
+
+
+% Trên nền của framework này, E1 sử dụng kiến trúc Transformer bao gồm các thành phần chính như Encoder và decoder cùng có sáu lớp; mỗi lớp
+% dùng biểu diễn 512 chiều, tầng feed-forward 2.048 chiều, tám attention head và
+% dropout 0,1. Embedding đầu vào và ma trận chiếu đầu ra của decoder được chia
+% sẻ trọng số. Mô hình có 67.652.608 tham số và toàn bộ tham số đều được tối ưu từ đầu mà không thông qua bất kì các phương pháp fine-tuning nào. Cụ thể hơn, trong thí nghiệm này, Fairseq giúp đảm nhận việc xây dựng từ điển chỉ từ tập train, chuyển các cặp câu đã được tokenize sang định dạng nhị phân, hỗ trợ tối ưu tham số mô hình, theo dõi metrics như BLEU trên tập validation, lưu các checkpoint tốt nhất để thực hiện việc inference. Nhưng cũng phải lưu ý thêm là các tham số đang được lựa chọn cho thí nghiệm này không phải là các tham số tốt nhất. 
+
+% Ở phía tiếng Việt, đơn vị đầu vào là token đã có sẵn trong corpus; ở phía Hán
+% văn, mỗi ký tự là một token. Fairseq xây dictionary chỉ từ tập train, với
+% \texttt{--thresholdsrc} và \texttt{--thresholdtgt} cùng bằng 1 đồng nghĩa với việc mọi token nếu xuất hiện ít nhất 1 lần trong tập train sẽ đều được dưa vào dictionary tương ứng. Vì vậy mà pipeline không loại bỏ token train dựa trên tần suất. Tuy nhiên cũng không thể loại bỏ việc các token chỉ trong trong các tập validation/test cũng sẽ nằm ngoài tập train, dẫn đến chúng sẽ bỉ ánh xạ thành token \texttt{<unk>}.
+
+
+% Ta xét objective function như sau:  Gọi $x$ là câu nguồn tiếng Việt và
+% $y_{1:T}=(y_1,\ldots,y_T)$ là câu đích gồm $T$ token Hán văn. Tại vị trí
+% $t$, decoder ước lượng phân phối xác suất
+% \[
+%   p(v\mid y_{<t},x), \qquad v\in V,
+% \]
+% trên toàn bộ dictionary đích $V$. Trong đó, $y_{<t}$ là các token đích đứng
+% trước vị trí $t$. Trong quá trình huấn luyện, mô hình nhận các token đích đúng
+% ở những vị trí trước để dự đoán token tiếp theo; cơ chế này được gọi là
+% \emph{teacher forcing}.
+
+% Nếu không sử dụng label smoothing, hàm cross-entropy có dạng
+% \begin{equation}
+%   \mathcal{L}_{\mathrm{CE}}
+%   =
+%   -\sum_{t=1}^{T}
+%   \log p(y_t\mid y_{<t},x).
+%   \label{eq:e1-standard-ce}
+% \end{equation}
+% Mỗi số hạng là negative log-likelihood của token đúng tại một vị trí. Khi mô
+% hình gán xác suất cao cho $y_t$, giá trị $-\log p(y_t\mid y_{<t},x)$ nhỏ;
+% ngược lại, nếu xác suất của token đúng thấp thì loss tăng.
+
+% Trong E1, Fairseq áp dụng label smoothing với
+% $\varepsilon=0{,}1$. Phân phối mục tiêu tại vị trí $t$ được định nghĩa là
+% \begin{equation}
+%   q_t(v)
+%   =
+%   \begin{cases}
+%     1-\varepsilon, & \text{nếu } v=y_t,\\[3pt]
+%     \displaystyle\frac{\varepsilon}{|V|-1},
+%       & \text{nếu } v\neq y_t.
+%   \end{cases}
+%   \label{eq:e1-smoothed-target}
+% \end{equation}
+% Thay vì gán toàn bộ xác suất mục tiêu bằng 1 cho token đúng và 0 cho mọi token
+% khác, label smoothing dành $1-\varepsilon=0{,}9$ cho token đúng và phân phối
+% phần xác suất còn lại cho các token khác trong dictionary.
+
+% Hàm mất mát được sử dụng là cross-entropy giữa phân phối mục tiêu đã làm trơn
+% $q_t$ và phân phối dự đoán $p$:
+% \begin{equation}
+%   \mathcal{L}_{\mathrm{E1}}
+%   =
+%   -\sum_{t=1}^{T}\sum_{v\in V}
+%   q_t(v)\log p(v\mid y_{<t},x).
+%   \label{eq:e1-loss}
+% \end{equation}
+% Tương đương,
+% \begin{equation}
+%   \mathcal{L}_{\mathrm{E1}}
+%   =
+%   -\sum_{t=1}^{T}
+%   \left[
+%     (1-\varepsilon)\log p(y_t\mid y_{<t},x)
+%     +
+%     \frac{\varepsilon}{|V|-1}
+%     \sum_{\substack{v\in V\\v\neq y_t}}
+%     \log p(v\mid y_{<t},x)
+%   \right].
+%   \label{eq:e1-loss-expanded}
+% \end{equation}
+% Các vị trí padding không đóng góp vào loss vì Fairseq loại chúng bằng
+% \texttt{ignore\_index}.
+
+% \begin{table}[tbp]
+%   \centering
+%   \small
+%   \renewcommand{\arraystretch}{1.15}
+%   \caption{Ký hiệu trong hàm mất mát của E1.}
+%   \label{tab:e1-loss-notation}
+%   \begin{tabularx}{\textwidth}{@{}p{2.2cm}X@{}}
+%     \toprule
+%     \textbf{Ký hiệu} & \textbf{Ý nghĩa} \\
+%     \midrule
+%     $x$
+%       & Câu nguồn tiếng Việt. \\
+
+%     $y_{1:T}$
+%       & Toàn bộ câu đích Hán văn gồm $T$ token. Trong E1, mỗi token đích
+%         tương ứng với một ký tự. \\
+
+%     $y_t$
+%       & Ký tự đích đúng tại vị trí $t$. \\
+
+%     $y_{<t}$
+%       & Các ký tự đích đứng trước vị trí $t$, tức
+%         $(y_1,\ldots,y_{t-1})$. \\
+
+%     $V$
+%       & Dictionary đích được xây từ tập train; $|V|$ là số mục trong
+%         dictionary. Với E1, $|V|=5.392$, bao gồm các ký hiệu đặc biệt của
+%         Fairseq. \\
+
+%     $v$
+%       & Một token bất kỳ trong dictionary đích $V$. \\
+
+%     $p(v\mid y_{<t},x)$
+%       & Xác suất mà decoder gán cho token $v$ tại vị trí $t$, sau khi quan sát
+%         câu nguồn và các token đích trước đó. \\
+
+%     $q_t(v)$
+%       & Xác suất mục tiêu sau khi áp dụng label smoothing. \\
+
+%     $\varepsilon$
+%       & Hệ số label smoothing; E1 sử dụng $\varepsilon=0{,}1$. \\
+
+%     $\mathcal{L}_{\mathrm{E1}}$
+%       & Tổng loss trên các vị trí đích không phải padding. Đây là đại lượng
+%         được tối thiểu hóa trong quá trình huấn luyện. \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+
+
+%   \begin{table}[tbp]
+%     \centering
+%     \small
+%     \renewcommand{\arraystretch}{1.15}
+%     \setlength{\tabcolsep}{5pt}
+%     \caption{Cấu hình huấn luyện và giải mã của mô hình E1.}
+%     \label{tab:e1-training-config}
+%     \begin{tabularx}{\textwidth}{@{}p{3.2cm}p{3.0cm}X@{}}
+%       \toprule
+%       \textbf{Thành phần}
+%         & \textbf{Giá trị}
+%         & \textbf{Diễn giải} \\
+%       \midrule
+
+%       \multicolumn{3}{@{}l}{\textit{Tối ưu hóa}} \\[2pt]
+
+%       Bộ tối ưu
+%         & Adam
+%         & Sử dụng $\beta_1=0{,}9$ và $\beta_2=0{,}998$. \\
+
+%       Learning rate cực đại
+%         & $5\times10^{-4}$
+%         & Learning rate tăng dần trong giai đoạn warmup, sau đó giảm theo lịch
+%           \texttt{inverse\_sqrt}. \\
+
+%       Warmup
+%         & 8.000 update
+%         & Giảm nguy cơ cập nhật quá mạnh trong giai đoạn đầu của quá trình
+%           huấn luyện. \\
+
+%       Weight decay
+%         & 0
+%         & Không áp dụng regularization dựa trên chuẩn của trọng số. \\
+
+%       Gradient clipping
+%         & 0
+%         & Không giới hạn chuẩn gradient. \\
+
+%       \addlinespace
+%       \multicolumn{3}{@{}l}{\textit{Batch và tài nguyên tính toán}} \\[2pt]
+
+%       Kích thước mini-batch
+%         & Tối đa 1.000 token/GPU
+%         & Fairseq tạo batch động dựa trên tổng số token thay vì cố định số câu. \\
+
+%       Tích lũy gradient
+%         & \texttt{update\_freq}=4
+%         & Gradient được tích lũy qua bốn mini-batch trước mỗi lần cập nhật
+%           trọng số; ngân sách danh nghĩa tối đa xấp xỉ 4.000 token/update. \\
+
+%       Số GPU
+%         & 1
+%         & Huấn luyện phân tán không được sử dụng. \\
+
+%       Độ chính xác số
+%         & fp16
+%         & Giảm mức sử dụng bộ nhớ và tăng tốc tính toán trên GPU. \\
+
+%       Seed
+%         & 42
+%         & Được cố định để kiểm soát các nguồn ngẫu nhiên trong pipeline. \\
+
+%       \addlinespace
+%       \multicolumn{3}{@{}l}{\textit{Điều kiện dừng và lựa chọn mô hình}} \\[2pt]
+
+%       Số update tối đa
+%         & 50.000
+%         & Huấn luyện dừng khi đạt giới hạn này nếu chưa dừng bởi điều kiện khác. \\
+
+%       Số epoch tối đa
+%         & 500
+%         & Đặt giới hạn trên cho số lần duyệt qua tập train. \\
+
+%       Early stopping
+%         & Patience 20
+%         & Dừng nếu BLEU trên validation không cải thiện trong 20 epoch liên tiếp. \\
+
+%       Lựa chọn checkpoint
+%         & BLEU validation cao nhất
+%         & Chỉ checkpoint tốt nhất theo BLEU validation được giữ để sinh bản dịch. \\
+
+%       \addlinespace
+%       \multicolumn{3}{@{}l}{\textit{Decoding}} \\[2pt]
+
+%       Phương pháp
+%         & Beam search
+%         & Duy trì nhiều giả thuyết dịch đồng thời thay vì chọn tham lam từng token. \\
+
+%       Beam size
+%         & 7
+%         & Giữ tối đa bảy giả thuyết có điểm cao nhất tại mỗi bước giải mã. \\
+
+%       Length penalty
+%         & 1,0
+%         & Không ưu tiên bổ sung cho bản dịch dài hoặc ngắn khi chuẩn hóa điểm. \\
+
+%       Giới hạn độ dài
+%         & $1{,}2|x|+10$
+%         & Số token đích tối đa được xác định từ độ dài câu nguồn $|x|$. \\
+
+%       \bottomrule
+%     \end{tabularx}
+%   \end{table}
+
+%   Các siêu tham số trong Bảng~\ref{tab:e1-training-config} được xác định trước khi
+%   huấn luyện. Do giới hạn về tài nguyên tính toán, nghiên cứu không thực hiện tìm
+%   kiếm siêu tham số có hệ thống; vì vậy, cấu hình này được xem là một thiết lập
+%   baseline có lập luận, không phải cấu hình đã được chứng minh là tối ưu.
+% \subsub
+% \subsection{Thí nghiệm 2 (E2): Mô hình ngôn ngữ lớn (Qwen3-8B)}
+% \subsubsection{Mô hình ngôn ngữ lớn và cấu trúc của Qwen3-8B}
+% \subsubsection{Phương pháp Fine-tuning với QLora}
+% \subsubsection{Hà}
+% \texttt{E2} xuất phát từ một revision cố định của Qwen3-8B (commit được ghim
+% trong file cấu hình)~\cite{qwen3technicalreport}. Thay vì cập nhật tám tỷ tham
+% số, trọng số nền được lượng tử hoá NF4 4-bit kèm double quantization, và chỉ
+% các adapter LoRA được huấn luyện~\cite{hu2021lora,dettmers2023qlora}. Với một
+% phép biến đổi tuyến tính có trọng số đóng băng $W$, adapter học hai ma trận
+% hạng thấp:
+% \begin{equation}
+%   h = Wx + \frac{\alpha}{r}BAx,
+%   \qquad r=16,\quad \alpha=32.
+%   \label{eq:lora}
+% \end{equation}
+% LoRA được gắn vào mọi module tuyến tính, với dropout bằng 0 và không học bias.
+% Mô hình được chuẩn bị bằng \texttt{prepare\_model\_for\_kbit\_training} kết
+% hợp gradient checkpointing; phần tính toán chạy ở fp16. Đây là sự đánh đổi
+% trực tiếp giữa chi phí bộ nhớ và năng lực thích nghi: mô hình nền cung cấp
+% tri thức đa ngữ mạnh, nhưng không được cập nhật đầy đủ và quá trình huấn luyện
+% phụ thuộc vào kernel lượng tử hoá.
+
+% \begin{figure}[tbp]
+%   \centering
+%   \begin{tikzpicture}[
+%       font=\footnotesize,node distance=7mm,
+%       block/.style={draw,rounded corners,align=center,minimum height=10mm,
+%                     text width=29mm},
+%       frozen/.style={block,fill=gray!14},
+%       trainable/.style={block,fill=orange!14,draw=orange!65!black},
+%       data/.style={block,fill=blue!7,draw=blue!55!black},
+%       arr/.style={-{Latex[length=1.8mm]},thick}]
+%     \node[data] (prompt) {Token chat\\prompt + câu trả lời};
+%     \node[frozen,right=of prompt] (base) {Qwen3-8B\\NF4, $W$ đóng băng};
+%     \node[trainable,above right=2mm and 8mm of base] (a) {LoRA $A$\\$d\rightarrow r$};
+%     \node[trainable,below right=2mm and 8mm of base] (b) {LoRA $B$\\$r\rightarrow d$};
+%     \node[data,right=27mm of base] (sum) {$Wx+\frac{\alpha}{r}BAx$\\logits causal LM};
+%     \node[trainable,right=of sum] (loss) {Loss chỉ tính trên\\token assistant};
+%     \draw[arr] (prompt)--(base);
+%     \draw[arr] (base)--node[above,font=\tiny]{nhánh đóng băng}(sum);
+%     \draw[arr,orange!75!black] (base.north)|-(a.west);
+%     \draw[arr,orange!75!black] (a)--(b);
+%     \draw[arr,orange!75!black] (b.east)-|(sum.south);
+%     \draw[arr] (sum)--(loss);
+%   \end{tikzpicture}
+%   \caption{Luồng tham số của \texttt{E2}. Màu xám là trọng số nền đã lượng tử
+%   hoá và đóng băng; màu cam là nhánh LoRA duy nhất nhận gradient.}
+%   \label{fig:qlora-path}
+% \end{figure}
+
+% \subsubsection{Chat template và loss chỉ tính trên câu trả lời}
+
+% Mỗi cặp câu được render thành một lượt system mô tả nhiệm vụ, một lượt user
+% chứa câu nguồn và một lượt assistant chứa Hán văn viết liền. Chế độ thinking
+% của Qwen3 được tắt ở cả huấn luyện lẫn suy luận để output không lẫn phần lập
+% luận. Pipeline render hai lần: một lần dừng ở đầu lượt assistant để lấy
+% prefix, và một lần với câu đích đầy đủ; sau đó kiểm tra rằng chuỗi mã hoá đầy
+% đủ thực sự bắt đầu bằng prefix trước khi gán nhãn $-100$ cho toàn bộ phần
+% prefix. Nhờ vậy:
+% \begin{equation}
+%   \mathcal{L}_{\mathrm{E2}}
+%   = -\sum_{t:\,m_t=1}\log p(y_t\mid z_{<t}),\qquad
+%   m_t = \begin{cases}0,&t\in\text{prompt},\\1,&t\in\text{câu trả lời}.
+%   \end{cases}
+%   \label{eq:response-loss}
+% \end{equation}
+% Hàm mục tiêu này giúp mô hình không tiêu tốn gradient để học nhắc lại chỉ dẫn.
+% Phép kiểm tra prefix biến rủi ro âm thầm khi chat template thay đổi thành một
+% lỗi dừng chương trình rõ ràng.
+
+% \begin{figure}[tbp]
+%   \centering
+%   \begin{tikzpicture}[
+%       font=\footnotesize,
+%       seg/.style={draw,minimum height=11mm,align=center,inner sep=2mm},
+%       mask/.style={seg,fill=gray!13},
+%       learn/.style={seg,fill=orange!14,draw=orange!65!black}]
+%     \node[mask,text width=29mm] (sys) {chỉ dẫn system\\nhãn $=-100$};
+%     \node[mask,text width=27mm,right=0pt of sys] (usr) {user + câu nguồn\\nhãn $=-100$};
+%     \node[mask,text width=18mm,right=0pt of usr] (ast) {prefix\\assistant};
+%     \node[learn,text width=28mm,right=0pt of ast] (ans) {token đích\\cross-entropy};
+%     \node[below=4mm of usr,align=center,font=\scriptsize] (prefix)
+%       {chuỗi mã hoá prefix phải là tiền tố chính xác của chuỗi mã hoá đầy đủ};
+%     \draw[-{Latex[length=1.5mm]}] (prefix.west)-|(sys.south);
+%     \draw[-{Latex[length=1.5mm]}] (prefix.east)-|(ast.south);
+%   \end{tikzpicture}
+%   \caption{Cơ chế mask của \texttt{E2}: chỉ vùng màu cam đóng góp vào loss.}
+%   \label{fig:response-mask}
+% \end{figure}
+
+% Sau khi xáo trộn với seed cố định, các ví dụ hoàn chỉnh được gộp tham lam
+% (greedy packing) vào cửa sổ 768 token; không ví dụ nào bị cắt đôi nên ranh
+% giới mask vẫn chính xác. 19.218 ví dụ trở thành 2.903 chuỗi đã gộp, trong khi
+% ví dụ dài nhất chỉ 481 token, nên việc hạ giới hạn từ 1.024 xuống 768 sau bước
+% kiểm tra bộ nhớ không cắt mất câu đích nào. Cách gộp này giảm padding, nhưng
+% attention không được đặt lại giữa các ví dụ trong cùng một cửa sổ; nói cách
+% khác, các ví dụ trong một cửa sổ không hoàn toàn độc lập ở tầng attention.
+
+% \texttt{E2} dùng \texttt{paged\_adamw\_8bit}, learning rate $2\times10^{-4}$
+% theo lịch cosine, tỉ lệ warmup 0,05, weight decay 0,01 và gradient clipping
+% 1,0. Batch hiệu dụng là 16 cửa sổ đã gộp; ba epoch tương ứng 546 update.
+% Checkpoint được đánh giá và lưu sau mỗi 200 step, và được chọn theo
+% \texttt{eval\_loss}. Khi suy luận, mô hình dùng beam 4, không sampling, với
+% giới hạn độ dài
+% \begin{equation}
+%   N_{\max}=\min\left(512,\left\lceil2|x|\right\rceil+32\right).
+% \end{equation}
+% Việc chọn \texttt{eval\_loss} thay cho BLEU, cũng như các hằng số giới hạn độ
+% dài, đều chưa được ablation; chúng được báo cáo như một cấu hình cố định.
+% \subsection{Thí nghiệm 3 (E3): Huấn luyện mô hình Transformer từ đầu kết hợp Knowledge Injection}
+
+% \texttt{E3-custom} giữ nguyên các khối \texttt{model}, \texttt{training} và
+% \texttt{decoding} của \texttt{E1}. Can thiệp duy nhất nằm ở tầng dữ liệu:
+% trước bước binarization, pipeline nối thêm các ký tự Hán ứng viên vào cuối câu
+% nguồn tiếng Việt. Cơ sở tri thức \texttt{knowledge.json} chứa 16.000 mục và
+% bao phủ 5.013 trong số 5.458 ký tự đích phân biệt của corpus (91,85\%). Độ bao
+% phủ chỉ cho biết một ký tự có mặt trong cơ sở tri thức hay không; nó không bảo
+% đảm ứng viên đúng sẽ được truy hồi, càng không bảo đảm mô hình biết cách sử
+% dụng ứng viên đó.
+
+% Chỉ mục tra cứu được xây dựng bằng cách gom các chuỗi tiếng Việt từ các trường
+% \texttt{pronunciation}, \texttt{nom\_query}, \texttt{lookup\_\allowbreak query}
+% và \texttt{query\_\allowbreak variants}, sau khi casefold và chuẩn hoá khoảng
+% trắng. Với chuỗi token nguồn $x_{1:n}$, bộ truy hồi quét mọi vị trí bắt đầu
+% với mọi độ dài của các dạng tra cứu đã biết. Mỗi span khớp làm tăng số đếm
+% $m(c,x)$ cho những ký tự $c$ mà dạng đó có thể biểu diễn. Các ứng viên được
+% sắp xếp theo khoá:
+% \begin{equation}
+%   \operatorname{rank}(c\mid x)
+%   = \bigl(-m(c,x),\;-f_{\mathrm{train}}(c),\;\operatorname{Unicode}(c)\bigr),
+%   \label{eq:retrieval-rank}
+% \end{equation}
+% trong đó $f_{\mathrm{train}}$ chỉ được tính trên câu đích của tập train. Thành
+% phần thứ hai vì thế không đọc dữ liệu validation hay test, còn tiêu chí
+% Unicode bảo đảm kết quả xác định khi hai ứng viên có điểm bằng nhau.
+
+% \begin{figure}[tbp]
+%   \centering
+%   \begin{tikzpicture}[
+%       font=\footnotesize,node distance=7mm,
+%       box/.style={draw,rounded corners,align=center,text width=28mm,
+%                   minimum height=11mm,inner sep=2mm},
+%       data/.style={box,fill=green!9,draw=green!45!black},
+%       warn/.style={box,fill=red!5,draw=red!55!black},
+%       arr/.style={-{Latex[length=1.8mm]},thick}]
+%     \node[data] (kb) {Cơ sở tri thức\\6.389 dạng tra cứu};
+%     \node[data,right=of kb] (match) {Khớp span\\đếm ứng viên};
+%     \node[data,right=of match] (rank) {Xếp hạng: số lần khớp\\tần suất train\\Unicode};
+%     \node[data,right=of rank] (append) {Nối sentinel\\+ tối đa $k\leq64$ gợi ý};
+%     \node[warn,below=8mm of match] (length) {Câu nguồn dài gấp $\approx4$\\số câu mỗi batch giảm $\approx4$};
+%     \node[warn,below=8mm of append] (vocab) {Từ vựng nguồn gấp $4{,}8$\\tham số $+10{,}3\%$};
+%     \draw[arr] (kb)--(match); \draw[arr] (match)--(rank); \draw[arr] (rank)--(append);
+%     \draw[arr] (append.south)--++(0,-3mm)-|(length.east);
+%     \draw[arr] (append)--(vocab);
+%   \end{tikzpicture}
+%   \caption{Quy trình truy hồi của \texttt{E3-custom} và các hệ quả ngoài ý
+%   định: tuy chỉ sửa phía nguồn, can thiệp này vẫn làm thay đổi kích thước mô
+%   hình và động lực tối ưu.}
+%   \label{fig:knowledge-retrieval}
+% \end{figure}
+
+% Khi có ứng viên, câu nguồn được render thành
+% \texttt{$x_1\ldots x_n$ \_\_knowledge\_\_ $h_1\ldots h_k$}, với $k\leq64$ và
+% tiếp tục bị cắt để không vượt quá 256 vị trí encoder. Con số 64 không kèm
+% ablation hay lập luận nào được ghi lại; artifact cho thấy 100\% số dòng đều
+% được bổ sung gợi ý, với trung bình 61,5--62,4 ứng viên mỗi câu, tức bộ truy
+% hồi gần như luôn chạm trần ở mọi split. Đây là một thiết kế thiên về recall
+% cao nhưng gần như không có tính chọn lọc.
+
+% Việc bổ sung gợi ý làm độ dài câu nguồn trong train tăng từ trung bình 20,92
+% lên 83,44 token trước EOS. Dictionary phía nguồn tăng từ 3.616 lên 17.264
+% type. Do \texttt{E1} chỉ chia sẻ embedding đầu vào và đầu ra của decoder,
+% embedding của encoder phải mở rộng thêm $13.648\times512=6.987.776$ tham số;
+% tổng số tham số vì vậy tăng từ 67.652.608 lên 74.640.384. Với cùng giới hạn
+% 1.000 token mỗi GPU, mỗi batch do đó chứa ít câu hơn hẳn. Nói cách khác,
+% \texttt{E1} và \texttt{E3-custom} là phép so sánh giữa hai quy trình dùng chung
+% cấu hình khai báo nhưng khác nhau về kích thước mô hình và về số câu thực tế
+% trong mỗi batch; không nên xem đây là phép đo cô lập tác động của truy hồi.
+
+% \paragraph{Phân biệt với E3 chính thức.}
+% Hệ thống \texttt{e3\_fairseq\_knowledge} trong đặc tả của phòng lab đòi hỏi
+% phần tích hợp \texttt{knowledge\_v2}, vốn chưa được cung cấp, nên backend chủ
+% động dừng. Hệ thống đã thực sự chạy mang định danh riêng
+% \texttt{e3\_custom\_fairseq\_knowledge\_vi\_zh\_v1}; vì vậy mọi bảng biểu và
+% diễn giải đều phải giữ hậu tố \emph{custom}. Thí nghiệm \texttt{E4} (Qwen3 kết
+% hợp cùng cơ chế truy hồi) mới chỉ được triển khai và kiểm tra tiền chạy, chưa
+% được huấn luyện, nên nằm ngoài phạm vi phần này.
+% \subsection{Cách đánh giá}
+% \subsubsection{Các chỉ số được sử dụng cho mục đích đánh giá}
+% \subsubsection{Quy trình đánh giá chính}
+% \subsection{Config của 3 thí nghiệm và cách thiết lập trong code}
+
+% Bảng~\ref{tab:configs} so sánh cấu hình được khai báo của ba hệ thống. Cần lưu
+% ý rằng batch của Fairseq tính theo token, còn batch của \texttt{E2} tính theo
+% cửa sổ đã gộp, nên không thể quy hai đại lượng này về cùng một thang ``số câu
+% mỗi update''.
+
+% \begin{table}[tbp]
+%   \centering
+%   \footnotesize
+%   \renewcommand{\arraystretch}{1.16}
+%   \setlength{\tabcolsep}{3.5pt}
+%   \caption{Cấu hình mô hình, huấn luyện và giải mã của ba hệ thống.}
+%   \label{tab:configs}
+%   \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.45cm}XXX@{}}
+%     \toprule
+%     Thuộc tính & \texttt{E1} & \texttt{E2} & \texttt{E3-custom} \\
+%     \midrule
+%     Kiến trúc nền
+%       & Transformer 6+6 lớp, $d=512$
+%       & Qwen3-8B NF4 + LoRA $r=16$
+%       & Như \texttt{E1}, câu nguồn có gợi ý \\
+%     Tham số
+%       & 67,65M, huấn luyện toàn bộ
+%       & 8B đóng băng + LoRA huấn luyện được
+%       & 74,64M, huấn luyện toàn bộ \\
+%     Dạng câu đích
+%       & Tách theo ký tự & Hán văn viết liền & Tách theo ký tự \\
+%     Hàm mục tiêu
+%       & CE có label smoothing 0,1 & CE causal, chỉ trên câu trả lời & Như \texttt{E1} \\
+%     Bộ tối ưu
+%       & Adam, $5\times10^{-4}$, inverse-sqrt
+%       & Paged AdamW 8-bit, $2\times10^{-4}$, cosine
+%       & Như \texttt{E1} \\
+%     Batch khai báo
+%       & 1.000 token $\times$ tích luỹ 4
+%       & 1 cửa sổ $\times$ tích luỹ 16
+%       & Như \texttt{E1} \\
+%     Chọn checkpoint
+%       & BLEU validation, patience 20
+%       & Loss validation, mỗi 200 step
+%       & BLEU validation, patience 20 \\
+%     Giải mã
+%       & Beam 7; $1{,}2|x|+10$
+%       & Beam 4; $\min(512,\lceil2|x|\rceil+32)$
+%       & Như \texttt{E1} \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+% Cấu hình khai báo và quá trình chạy thực tế khác nhau đáng kể
+% (Bảng~\ref{tab:realized}). Báo cáo cả hai giúp tránh việc hiểu nhầm các giới
+% hạn như \texttt{max\_update} là lượng huấn luyện đã thực sự diễn ra.
+
+% \begin{table}[tbp]
+%   \centering
+%   \footnotesize
+%   \renewcommand{\arraystretch}{1.18}
+%   \caption{Cấu hình dừng và chọn mô hình so với hành vi thực tế của các lần
+%   chạy đã sinh artifact. Đây là thông tin về phương pháp, không phải kết quả
+%   dịch.}
+%   \label{tab:realized}
+%   \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.2cm}XXX@{}}
+%     \toprule
+%     & \texttt{E1} & \texttt{E2} & \texttt{E3-custom} \\
+%     \midrule
+%     Giới hạn khai báo
+%       & 50k update; 500 epoch; patience 20
+%       & 3 epoch, tương đương 546 step
+%       & Như \texttt{E1} \\
+%     Thực tế
+%       & Dừng ở epoch 171, update 24.791
+%       & Hoàn tất đủ 546 step
+%       & Chạm mốc 50.000 update ở epoch 87 \\
+%     Checkpoint được chọn
+%       & BLEU tốt nhất ở epoch 151
+%       & Loss tốt nhất ở step 400; chỉ có hai điểm đánh giá
+%       & BLEU tốt nhất ở epoch 77 \\
+%     Batch quan sát được
+%       & Trung bình 132,5 câu/update
+%       & 16 cửa sổ đã gộp/update
+%       & Trung bình 33,3 câu/update \\
+%     Lưu ý chính
+%       & Checkpoint nối tiếp một lần chạy bị ngắt giữa chừng
+%       & Bản ghi đóng băng không khớp byte với cấu hình hiện tại
+%       & Không cân bằng ngân sách huấn luyện với \texttt{E1} \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+% Ba lưu ý ở hàng cuối không làm thay đổi prediction hay metric đã lưu, nhưng
+% chúng giới hạn những phát biểu có thể đưa ra về khả năng tái lập và về quan hệ
+% nhân quả. Với \texttt{E1}, checkpoint là kiểm chứng được, song không thể tái
+% tạo bằng một lệnh chạy sạch duy nhất vì quá trình huấn luyện đã được nối tiếp
+% từ epoch 5, update 579. Với \texttt{E2}, cấu hình huấn luyện và khối giải mã
+% vẫn còn trong manifest và trong các dòng prediction, nhưng không thể chứng
+% minh từ bản ghi đóng băng hiện tại rằng trạng thái của \texttt{prompt} và
+% \texttt{model.*} tại đúng thời điểm sinh kết quả trên test là như đã ghi.
+% Những chi tiết này cần được nhắc lại ở phần Hạn chế, thay vì bị che lấp bởi
+% một tuyên bố chung chung về khả năng tái lập.
+
+% \subsection{Chọn mô hình trên validation và thực hiện test}
+
+% Mỗi hệ thống lần lượt được huấn luyện, dự đoán và chấm điểm trên validation,
+% sau đó lựa chọn được đóng băng, rồi mới dự đoán trên test. Bước
+% \texttt{freeze-selection} ghi lại hash của file cấu hình, của
+% checkpoint/adapter, của khối giải mã, của prediction trên validation và của
+% metric trên validation. Trước mỗi lần giải mã test, hàm
+% \texttt{ensure\_selection\_frozen} tính lại toàn bộ các giá trị này. Mọi thay
+% đổi hậu nghiệm đối với mô hình hay tham số beam sẽ khiến pipeline dừng lại,
+% thay vì sinh ra một điểm test mới.
+
+% \begin{figure}[tbp]
+%   \centering
+%   \begin{tikzpicture}[
+%       font=\footnotesize,node distance=7mm,
+%       flowstep/.style={draw,rounded corners,align=center,minimum height=9mm,
+%                        text width=28mm,fill=blue!7},
+%       gate/.style={draw,diamond,aspect=2.2,align=center,inner sep=1.5mm,
+%                    fill=red!5,draw=red!55!black},
+%       arr/.style={-{Latex[length=1.8mm]},thick}]
+%     \node[flowstep] (train) {Huấn luyện};
+%     \node[flowstep,right=of train] (valp) {Dự đoán + chấm\\validation};
+%     \node[flowstep,right=of valp] (select) {Chọn\\checkpoint};
+%     \node[gate,below=8mm of select] (freeze) {hash\\khớp?};
+%     \node[flowstep,below left=9mm and 8mm of freeze] (test) {Dự đoán\\test};
+%     \node[flowstep,below=of test] (metric) {Chuẩn hoá + chấm\\+ bootstrap};
+%     \node[below right=9mm and 8mm of freeze,align=center,text width=38mm] (stop)
+%       {Dừng nếu cấu hình, checkpoint, khối giải mã hoặc artifact validation
+%        thay đổi};
+%     \draw[arr] (train)--(valp); \draw[arr] (valp)--(select);
+%     \draw[arr] (select)--(freeze);
+%     \draw[arr] (freeze.south west)--node[left,font=\scriptsize]{có}(test.north);
+%     \draw[arr] (test)--(metric);
+%     \draw[-{Latex[length=1.8mm]},thick,red!65!black]
+%       (freeze.south east)--node[right,font=\scriptsize]{không}(stop.north);
+%   \end{tikzpicture}
+%   \caption{Cổng validation--test: cam kết không tinh chỉnh trên tập test được
+%   cơ học hoá thành một điều kiện kiểm tra bằng hash.}
+%   \label{fig:freeze-gate}
+% \end{figure}
+
+% Cổng kiểm soát này bảo vệ \emph{quy trình}, chứ không làm cho tiêu chí chọn
+% checkpoint trở nên giống nhau giữa các hệ thống. \texttt{E1} và
+% \texttt{E3-custom} dùng BLEU nội bộ của Fairseq, còn \texttt{E2} dùng loss và
+% chỉ có hai điểm đánh giá. Vì vậy, phép so sánh cuối cùng phản ánh cả chiến
+% lược chọn checkpoint. Không có thay đổi hậu nghiệm nào được thực hiện để làm
+% các tiêu chí này đồng nhất sau khi kết quả test đã được sinh ra.
+
+% \subsection{Chấm điểm và so sánh các phương pháp}
+
+% \subsubsection{Metric cấp ký tự trên dạng chuẩn}
+
+% Mỗi file prediction dạng JSONL phải có đúng 510 dòng theo cùng thứ tự ID,
+% không trùng ID và chỉ chứa một cặp thí nghiệm--split. Trước khi chấm, bộ đánh
+% giá tự tính lại
+% \texttt{score\_form\_\allowbreak chinese(prediction)} và từ chối file nếu giá
+% trị này khác với trường \texttt{prediction\_scored}. Phép kiểm tra này ngăn
+% những output đã bị chỉnh tay hoặc được chuẩn hoá bằng đoạn code khác lọt vào
+% bước tính metric.
+
+% BLEU được tính bằng SacreBLEU~\cite{papineni2002bleu,post2018sacrebleu}, còn
+% chrF++ theo Popovi\'c~\cite{popovic2017chrfpp}; cấu hình chi tiết nằm trong
+% Bảng~\ref{tab:metrics}. Vì các bước phía trước đã chèn khoảng trắng giữa mọi
+% codepoint, tokenizer \texttt{13a} gần như không còn đơn vị từ nào để phân
+% tách: BLEU được báo cáo ở đây thực chất là BLEU cấp ký tự. Tương tự, với
+% \texttt{whitespace=false}, thành phần word bigram của chrF++ cũng vận hành
+% trên các đơn vị đã được tách sẵn, tức là trên ký tự. Các điểm số này so sánh
+% hợp lệ giữa ba hệ thống trong nghiên cứu, nhưng không cùng thang đo với BLEU
+% cấp từ trên câu đích tiếng Anh hay tiếng Việt.
+
+% \begin{table}[tbp]
+%   \centering
+%   \small
+%   \renewcommand{\arraystretch}{1.18}
+%   \caption{Cấu hình đánh giá được lưu trong mọi artifact metric.}
+%   \label{tab:metrics}
+%   \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.5cm}p{4.7cm}X@{}}
+%     \toprule
+%     Thành phần & Thiết lập & Ý nghĩa \\
+%     \midrule
+%     SacreBLEU
+%       & v2.6.0; phân biệt hoa thường; tokenizer 13a; exponential smoothing;
+%         tắt effective order
+%       & BLEU corpus với n-gram 1--4 trên chuỗi đã tách theo ký tự \\
+%     chrF2++
+%       & v2.6.0; $n_c=6$; $n_w=2$; $\beta=2$; tắt whitespace
+%       & F-score ưu tiên recall, kết hợp n-gram ký tự và n-gram \emph{từ} \\
+%     Đơn vị đánh giá
+%       & 510 \texttt{sample\_id} ghép cặp, mỗi mẫu một câu tham chiếu
+%       & Giữ độ khó của câu đồng nhất trong mọi phép so sánh giữa các hệ thống \\
+%     Bootstrap
+%       & 1.000 lần lấy mẫu lại, seed 42, khoảng percentile 2,5--97,5
+%       & Ước lượng độ bất định của chênh lệch metric ở cấp corpus \\
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+% \subsubsection{Paired bootstrap}
+%   Để kiểm tra liệu chênh lệch giữa hai hệ thống có ổn định trên các câu test hay
+%   chỉ xuất phát từ một số câu cụ thể, nhóm sử dụng phương pháp paired bootstrap
+%   resampling~\cite{koehn2004statistical}. Hai hệ thống $A$ và $B$ được đánh giá
+%   trên cùng $N=510$ câu và có cùng câu tham chiếu. Trong mỗi lần lặp bootstrap,
+%   $N$ vị trí được lấy mẫu có hoàn lại từ tập test. Cùng một tập vị trí được dùng
+%   để tính lại metric cho cả hai hệ thống, nhờ đó phép so sánh vẫn được thực hiện
+%   trên đúng các câu giống nhau.
+
+%   Gọi $I_b$ là tập chỉ số được lấy mẫu ở lần lặp thứ $b$, $R$ là tập câu tham
+%   chiếu và $M$ là metric BLEU hoặc chrF++. Chênh lệch giữa hệ thống $B$ và hệ
+%   thống $A$ trong lần lặp thứ $b$ được tính bởi
+%   \begin{equation}
+%     \Delta^{(b)}
+%     =
+%     M\!\left(B_{I_b},R_{I_b}\right)
+%     -
+%     M\!\left(A_{I_b},R_{I_b}\right),
+%     \qquad b=1,\ldots,1000.
+%   \end{equation}
+%   Trong đó, $\Delta^{(b)}>0$ cho biết hệ thống $B$ đạt điểm cao hơn $A$ trên mẫu
+%   bootstrap tương ứng.
+
+%   Từ 1.000 giá trị $\Delta^{(b)}$, khoảng tin cậy bootstrap 95\% được xác định
+%   bằng các percentile 2,5\% và 97,5\%. Nếu khoảng này chứa 0, dữ liệu chưa cung
+%   cấp đủ bằng chứng rằng hai hệ thống khác nhau một cách ổn định. Ngược lại, nếu
+%   toàn bộ khoảng nằm về một phía của 0, chênh lệch quan sát được nhất quán hơn
+%   trên các mẫu bootstrap.
+
+%   P-value hai phía được ước lượng từ tỷ lệ các giá trị $\Delta^{(b)}$ nằm ở mỗi
+%   phía của 0. Pipeline lấy tỷ lệ ở phía có ít mẫu hơn, nhân đôi và áp dụng hiệu
+%   chỉnh $+1$ cho cả tử số và mẫu số để tránh p-value bằng 0 khi chỉ sử dụng một
+%   số hữu hạn lần lặp. Tất cả phép so sánh sử dụng 1.000 lần lấy mẫu và seed 42.
+
+%   Việc lấy mẫu theo cặp giúp tập trung phép kiểm định vào chênh lệch dự đoán của
+%   hai hệ thống trên cùng các câu test. Tuy nhiên, phép kiểm định này không loại
+%   bỏ những yếu tố gây nhiễu khác, chẳng hạn khác biệt về số tham số, dữ liệu đầu
+%   vào, quá trình huấn luyện hoặc cách lựa chọn checkpoint.
+
+% \subsection{Các quyết định thiết kế và giới hạn}
+
+% Không phải mọi lựa chọn trong pipeline đều đã được kiểm chứng bằng thí nghiệm
+% đối chứng. Vì vậy, Bảng~\ref{tab:decisions} tổng hợp các quyết định thiết kế
+% chính, những phương án khác có thể được sử dụng và các giới hạn đi kèm. Mức độ
+% căn cứ được chia thành ba nhóm. \emph{Tài liệu} cho biết lý do đã được ghi rõ
+% trong đặc tả hoặc tài liệu dự án. \emph{Triển khai} cho biết quyết định được thể
+% hiện trong code hoặc artifact, còn lý do được suy ra từ cách triển khai.
+% \emph{Chưa đối chứng} cho biết chưa có thí nghiệm chỉ thay đổi riêng yếu tố đó
+% để so sánh các phương án.
+
+% \begin{table}[tbp]
+%   \centering
+%   \scriptsize
+%   \renewcommand{\arraystretch}{1.18}
+%   \setlength{\tabcolsep}{3pt}
+%   \caption{Các quyết định thiết kế, phương án thay thế và giới hạn tương ứng.}
+%   \label{tab:decisions}
+%   \begin{tabularx}{\textwidth}{@{}p{2.35cm}p{2.05cm}XXp{1.7cm}@{}}
+%     \toprule
+%     \textbf{Quyết định}
+%       & \textbf{Phương án khác}
+%       & \textbf{Lý do lựa chọn}
+%       & \textbf{Đánh đổi và giới hạn}
+%       & \textbf{Căn cứ} \\
+%     \midrule
+
+%     Không dùng BPE; giữ ngưỡng tần suất bằng 1
+%       & Áp dụng BPE hoặc loại token hiếm
+%       & Câu đích đã được tách tới cấp ký tự; mọi token xuất hiện trong train
+%         đều được giữ lại
+%       & Vẫn không sinh được token chỉ xuất hiện trong validation hoặc test;
+%         chưa so sánh trực tiếp với BPE
+%       & Tài liệu \\
+
+%     Giữ các cặp trùng lặp và ký tự U+FFFD
+%       & Loại cặp trùng; sửa hoặc loại dòng lỗi
+%       & Bảo toàn corpus được cung cấp và không tự phỏng đoán ký tự đã mất
+%       & Cặp trùng làm một số mẫu có trọng số lớn hơn; 44 câu nguồn được ghép
+%         với nhiều câu đích
+%       & Tài liệu \\
+
+%     Dùng câu đích viết liền cho \texttt{E2}
+%       & Chèn khoảng trắng giữa các Hán tự
+%       & Duy trì dạng văn bản tự nhiên phù hợp với đầu vào mà mô hình tiền
+%         huấn luyện thường tiếp nhận
+%       & Đầu ra phải được chuyển về dạng cấp ký tự trước khi chấm điểm
+%       & Triển khai \\
+
+%     Chỉ tính loss trên câu trả lời
+%       & Tính loss trên cả prompt và câu trả lời
+%       & Tập trung cập nhật vào phần bản dịch mà mô hình cần sinh
+%       & Phụ thuộc vào việc xác định đúng ranh giới giữa prompt và câu trả lời;
+%         pipeline có kiểm tra ranh giới này
+%       & Triển khai \\
+
+%     Ghép nhiều mẫu vào một cửa sổ huấn luyện của \texttt{E2}
+%       & Mỗi cửa sổ chỉ chứa một mẫu
+%       & Giảm lượng padding và sử dụng bộ nhớ GPU hiệu quả hơn
+%       & Attention không được đặt lại giữa các mẫu nằm trong cùng một cửa sổ
+%       & Triển khai \\
+
+%     Giới hạn tối đa 64 ký tự gợi ý trong \texttt{E3-custom}
+%       & Dùng ít gợi ý hơn hoặc xây dựng bộ xếp hạng chọn lọc hơn
+%       & Chưa tìm thấy tài liệu ghi rõ lý do chọn ngân sách 64
+%       & Phần lớn câu gần chạm giới hạn; chiều dài nguồn tăng khoảng 3,9 lần
+%       & Chưa đối chứng \\
+
+%     Xếp hạng gợi ý bằng tần suất trong train
+%       & Dùng bộ xếp hạng có xét ngữ cảnh, chỉ học từ train
+%       & Cho kết quả xác định và không sử dụng câu đích của validation hoặc test
+%       & Tần suất toàn corpus không cho biết ký tự nào phù hợp nhất với ngữ
+%         cảnh cụ thể
+%       & Triển khai \\
+
+%     Chọn adapter \texttt{E2} theo validation loss
+%       & Chọn theo BLEU validation
+%       & Trainer lưu và nạp lại checkpoint có validation loss thấp nhất
+%       & Khác tiêu chí chọn mô hình của \texttt{E1} và \texttt{E3-custom};
+%         run chỉ có hai thời điểm đánh giá
+%       & Chưa đối chứng \\
+
+%     Chấm điểm trên biểu diễn cấp ký tự
+%       & Chấm trực tiếp đầu ra theo tokenization riêng của từng hệ thống
+%       & Đưa đầu ra của Fairseq và Qwen về cùng một biểu diễn trước khi so sánh
+%       & Điểm BLEU thu được không thể so sánh trực tiếp với BLEU cấp từ
+%       & Tài liệu \\
+
+%     Khóa lựa chọn mô hình trước khi chạy test
+%       & Chỉ kiểm soát bằng quy ước thủ công
+%       & Ngăn việc thay đổi checkpoint hoặc cấu hình decoding sau khi đã xem
+%         kết quả test
+%       & Yêu cầu hash của config, checkpoint và cấu hình decoding phải nhất
+%         quán; chuỗi xác minh hiện tại của \texttt{E2} không còn khớp hoàn toàn
+%       & Tài liệu \\
+
+%     \bottomrule
+%   \end{tabularx}
+% \end{table}
+
+% Phép so sánh giữa ba hệ thống dựa trên ba nguyên tắc chính. Thứ nhất, cả ba hệ
+% thống xuất phát từ cùng các split dữ liệu, mặc dù cách biểu diễn đầu vào và
+% phương pháp huấn luyện khác nhau. Thứ hai, chúng được đánh giá trên cùng 510 câu
+% test và cùng các câu tham chiếu. Thứ ba, mọi bản dịch đều được chuyển về cùng
+% một biểu diễn cấp ký tự trước khi tính metric. Về mặt thiết kế, pipeline cũng
+% yêu cầu lựa chọn checkpoint phải được khóa trước khi sinh dự đoán test; tuy
+% nhiên, chuỗi xác minh artifact của \texttt{E2} hiện không còn khớp hoàn toàn
+% với config trên đĩa.
+
+% Những biện pháp trên cho phép so sánh chất lượng tổng thể của các hệ thống đã
+% triển khai. Tuy nhiên, chúng không đủ để quy toàn bộ chênh lệch điểm số cho một
+% thành phần riêng lẻ. Chẳng hạn, không thể kết luận mức thay đổi giữa
+% \texttt{E1} và \texttt{E3-custom} chỉ do knowledge retrieval, vì hai hệ thống
+% còn khác nhau về chiều dài đầu vào, kích thước từ vựng, số tham số và quá trình
+% huấn luyện thực tế. Để xác định tác động riêng của từng lựa chọn, cần thực hiện
+% các thí nghiệm đối chứng trong đó chỉ một yếu tố được thay đổi tại mỗi lần so
+% sánh.

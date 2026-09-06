@@ -1,0 +1,96 @@
+% !TEX program = xelatex
+\documentclass[12pt]{article}
+
+\usepackage{my-template}
+
+% Disable indentation on new paragraphs
+\setlength{\parindent}{0pt}
+
+% Line spacing 1.5
+% \renewcommand{\baselinestretch}{1.5}
+
+% Optional: graphic path
+% \graphicspath{PATH_TO_GRAPHIC_FOLDER}
+
+% To use Times font family, uncomment this row
+% \usepackage{mathptmx}
+
+% To use roman section / subsection, uncomment these rows
+% \renewcommand{\thesection}{\Roman{section}}
+% \renewcommand{\thesubsection}{\thesection.\Roman{subsection}}
+
+% Define course name, report name and report title.
+\newcommand{\coursename}{Xử Lý Ngôn Ngữ Tự Nhiên}
+\newcommand{\reportname}{ĐỒ ÁN CUỐI KÌ}
+\newcommand{\reporttitle}{Nghiên Cứu Và Xây Dựng Mô Hình Dịch Máy \\ Văn Bản Cổ Từ Tiếng Việt Sang Tiếng Trung}
+
+\newcommand{\studentname}
+{
+25C01040 & Phạm Thị Ánh Phát\\
+25C23002 & Nguyễn Nhật Quang\\
+25C23014 & Lê Hoàng Như\\
+25C23018 & Đinh Phan Khánh Vũ\\
+}
+
+\newcommand{\teachername}{PGS. TS. Đinh Điền \\ TS. Nguyễn Hồng Bửu Long}
+
+% Header
+% \lhead{\reporttitle}
+% \rhead{
+%   Trường Đại học Khoa học Tự nhiên - ĐHQG HCM\\
+%   \coursename
+% }
+
+\usepackage{tikz}
+
+% Footer
+% \newcommand{\leftfooter}{\LaTeX\ by \href{https://github.com/trhgquan}{Quan, Tran Hoang}}
+% \lfoot{\leftfooter}
+% ============ DOCUMENT ============
+\begin{document}
+\pagenumbering{roman}
+\input{content/title.tex}
+
+\tableofcontents
+\thispagestyle{empty}
+\pagebreak
+
+%\listoftables
+%\pagebreak
+
+%\listoffigures
+%\pagebreak
+
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{content/section-1}
+%\newpage
+\input{content/section-2}
+%\newpage
+\input{content/section-3}
+%\newpage
+\input{content/section-4}
+\input{content/section-5}
+%\newpage
+\input{content/section-6}
+\input{content/section-7}
+%\newpage
+%\newpage
+% \input{content/hinhanh}
+% \input{content/bangbieu}
+% \input{content/congthuctoan}
+% \input{content/thuattoan}
+% \input{content/code}
+% \input{content/ngonngu}
+% \input{content/cite}
+
+% Appendix
+% \appendix
+% Add \cleardoublepage to move appendices to next page.
+% \input{appendix/appendix.tex}
+
+\bibliographystyle{plain}
+\bibliography{reference}
+
+\end{document}

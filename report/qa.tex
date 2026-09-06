@@ -1,0 +1,493 @@
+% !TEX program = xelatex
+\documentclass[11pt]{article}
+
+\usepackage{my-template}
+\usepackage{microtype}
+
+\definecolor{qaaccent}{HTML}{315EFB}
+\definecolor{qasoft}{HTML}{EEF3FF}
+\definecolor{qamuted}{HTML}{5F6773}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=qaaccent,
+  urlcolor=qaaccent
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.18}
+\renewcommand{\contentsname}{Mục lục}
+\renewcommand{\tablename}{Bảng}
+
+\newcommand{\quickanswer}[1]{%
+  \par\medskip
+  \noindent\colorbox{qasoft}{%
+    \parbox{\dimexpr\linewidth-2\fboxsep\relax}{%
+      \textcolor{qaaccent}{\textbf{Trả lời ngắn.}} #1}}
+  \par\medskip
+}
+
+\begin{document}
+\begin{center}
+  {\LARGE\bfseries Q\&A kỹ thuật\par}
+  \vspace{3pt}
+  {\large Danh mục tra cứu nhanh cho nhóm\par}
+  \vspace{5pt}
+  {\small\textcolor{qamuted}{Cập nhật: 05/09/2026}\par}
+  \vspace{6pt}
+  \color{qaaccent}\rule{0.72\linewidth}{1.2pt}
+\end{center}
+
+\tableofcontents
+
+\section{Giải mã Fairseq}
+
+\subsection{Tại sao độ dài tối đa ở E1 và E3-custom được đặt bằng
+\texorpdfstring{$1{,}2$}{1,2} lần độ dài đầu vào cộng 10 token?}
+
+\quickanswer{Đây là một giới hạn kỹ thuật được chọn theo thống kê của corpus,
+không phải một hằng số do bài báo về Transformer hay beam search đề xuất. Hệ số
+$1{,}2$ bao phủ độ dài bản dịch hợp lệ trên các tập gold, còn phần cộng 10 bảo
+vệ các câu nguồn ngắn và ngăn mô hình sinh lặp quá dài.}
+
+\paragraph{Một token ở nhánh Fairseq là gì?}
+Nhánh Fairseq không áp dụng BPE hay SentencePiece: không có tùy chọn
+\texttt{--bpe} và cũng không có bước phân đoạn dưới từ trong
+\texttt{fairseq\_runner.py} hoặc các cấu hình. Vì vậy, một ``token'' mà
+decoder nhìn thấy chính là một đơn vị phân tách bằng khoảng trắng: phía nguồn
+là âm tiết tiếng Việt, còn phía đích là từng Hán tự. Thống kê độ dài của các
+tệp corpus do đó cũng chính là thống kê độ dài đầu vào và đầu ra của mô hình.
+
+\begin{table}[H]
+  \centering
+  \scriptsize
+  \caption{Thống kê độ dài thực tế của corpus.}
+  \label{tab:qa-fairseq-length}
+  \begin{tabularx}{\linewidth}{@{}lccccc>{\raggedright\arraybackslash}X@{}}
+    \toprule
+    Phân hoạch
+      & \shortstack{Token nguồn\\TB / max}
+      & \shortstack{Token đích\\TB / max}
+      & \shortstack{$p_{50}$\\đích/nguồn}
+      & $p_{95}$
+      & Max
+      & Tham chiếu vượt $1{,}2|x|+10$ \\
+    \midrule
+    Train (19.218)
+      & 20,9 / 199
+      & 18,6 / 196
+      & 0,870
+      & 1,417
+      & 49,3
+      & 353 (1,84\%) \\
+    Test gold (510)
+      & 20,7 / 90
+      & 17,6 / 79
+      & 0,864
+      & 1,030
+      & 1,190
+      & 0 (0,00\%) \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Vì sao chọn $a=1{,}2$?}
+Hán văn cổ thường cô đọng hơn tiếng Việt. Trung vị độ dài bản dịch gold chỉ
+xấp xỉ 0,86 token đích trên mỗi token nguồn; trên tập test gold, tham chiếu có
+tỷ lệ lớn nhất là 1,190. Vì vậy, $1{,}2$ nằm ngay trên cực đại quan sát được và
+cao hơn trung vị khoảng 40\%. Ngưỡng này đủ rộng để không cắt một bản dịch hợp
+lệ trên test, nhưng đủ chặt để giới hạn vòng lặp sinh lặp. Nếu dùng giới hạn
+mặc định dạng $a=0,b=200$, một đầu vào chỉ bốn token vẫn có thể sinh tới 200
+Hán tự khi decoder không phát ra token kết thúc.
+
+\paragraph{Vì sao cộng thêm $b=10$?}
+Tỷ lệ độ dài biến động mạnh ở các câu ngắn. Với đầu vào hai token,
+$1{,}2\times2=2{,}4$ sẽ cắt một bản dịch hoàn toàn bình thường dài bốn hoặc năm
+Hán tự. Phần cộng 10 đóng vai trò khoảng đệm cho những câu ngắn, vốn xuất hiện
+khá nhiều trong corpus, chẳng hạn ``趙 紀''. Ở các câu dài, thành phần
+$1{,}2|x|$ chi phối nên khoảng đệm này hầu như không làm giới hạn trở nên quá
+rộng.
+
+\paragraph{Lợi ích thực tế.}
+
+\begin{itemize}
+  \item \textbf{Giảm thời gian giải mã.} Vòng lặp beam có thể chạy tới
+  \texttt{max\_len} nếu một giả thuyết chưa sinh token kết thúc. Với beam 7 và
+  batch 64, giới hạn khoảng 35 bước cho một câu điển hình nhanh hơn đáng kể so
+  với cho phép tối đa 200 bước trên 510 câu và nhiều thí nghiệm.
+
+  \item \textbf{Nhất quán giữa chọn checkpoint và giải mã cuối.} Bốn giá trị
+  beam, length penalty, $a$ và $b$ được truyền vào
+  \texttt{--eval-bleu-args} khi huấn luyện
+  (\texttt{fairseq\_runner.py:166}) và lệnh generate
+  (\texttt{fairseq\_runner.py:242}). Vì vậy, checkpoint tốt nhất theo BLEU
+  validation được chọn bằng đúng chế độ giải mã dùng trên test.
+
+  \item \textbf{Bổ sung cho giới hạn toàn cục.} Cấu hình
+  \texttt{max\_target\_positions: 256} khiến Fairseq luôn chặn độ dài ở 255
+  token. Quy tắc $1{,}2|x|+10$ là giới hạn theo từng câu, chặt hơn nhưng vẫn
+  nằm dưới hàng rào toàn cục này.
+
+  \item \textbf{Kiểm soát độ dài có chủ đích.} Giá trị
+  \texttt{lenpen=1.0} không tăng hoặc giảm thêm mức phạt độ dài ngoài phép
+  chuẩn hóa thông thường. Do đó, quy tắc affine trên là giới hạn cứng chính và
+  cần được đặt rõ ràng thay vì kế thừa mức 200 token.
+\end{itemize}
+
+\paragraph{So sánh với nhánh QLoRA.}
+E2 và E4 dùng
+\[
+  \texttt{max\_new\_tokens}
+  =\min\!\left(512,\left\lceil2L_{\mathrm{src}}\right\rceil+32\right).
+\]
+Đây vẫn là một giới hạn affine theo độ dài nguồn, nhưng được nới rộng vì
+tokenizer của LLM dùng subword và có thể cần nhiều token hơn để biểu diễn một
+Hán tự. Hai backend vì vậy tuân theo cùng một nguyên tắc thiết kế, dù không thể
+dùng chung các hệ số.
+
+\paragraph{Lưu ý về tập train silver.}
+Trong tập train, 353 tham chiếu (1,84\%) vượt ngưỡng $1{,}2|x|+10$; tỷ lệ cực
+đại 49,3 đến từ một số ít cặp tự căn chỉnh sai lệch. Điều này không trực tiếp
+cắt dữ liệu huấn luyện vì giới hạn chỉ được áp dụng khi sinh câu. Trên các tập
+gold, không có tham chiếu nào vượt ngưỡng, nên các ngoại lệ ở train phản ánh
+nhiễu căn chỉnh hơn là bằng chứng cho thấy giới hạn giải mã quá chặt.
+
+\section{Token và biểu diễn văn bản}
+
+\subsection{Token trong hệ thống này là gì?}
+
+\quickanswer{Từ \emph{token} mang ba nghĩa khác nhau tùy giai đoạn: đơn vị phân
+tách bằng khoảng trắng trong mô hình Fairseq, subword của tokenizer Qwen3
+trong mô hình LLM, và từng Hán tự trong bước chấm điểm. Không nên dùng lẫn ba
+khái niệm này khi diễn giải giới hạn độ dài hoặc điểm BLEU.}
+
+\begin{table}[H]
+  \centering
+  \scriptsize
+  \caption{Đơn vị token tại ba giai đoạn của pipeline.}
+  \label{tab:qa-token-stages}
+  \begin{tabularx}{\linewidth}{
+    @{}
+    >{\raggedright\arraybackslash}p{2.45cm}
+    >{\raggedright\arraybackslash}p{3.05cm}
+    >{\raggedright\arraybackslash}p{1.75cm}
+    >{\raggedright\arraybackslash}p{1.9cm}
+    >{\raggedright\arraybackslash}X
+    @{}}
+    \toprule
+    Giai đoạn & Đơn vị & Tiếng Việt & Hán văn & Chi phối \\
+    \midrule
+    Mô hình Fairseq (E1/E3-custom)
+      & Đơn vị phân tách bằng khoảng trắng
+      & Âm tiết
+      & Một Hán tự
+      & \texttt{max\_len\_a/b}; \texttt{max\_source\_positions: 256};
+        \texttt{max\_tokens\_per\_gpu: 1000} \\
+    Mô hình LLM (E2/E4)
+      & Subword BPE của Qwen3
+      & Không cố định
+      & Không cố định
+      & $\texttt{max\_new\_tokens}
+        =\min(512,\lceil2L_{\mathrm{src}}\rceil+32)$ \\
+    Chấm điểm
+      & Một ký tự Unicode
+      & Không áp dụng
+      & Một Hán tự
+      & \texttt{score\_form\_chinese} và SacreBLEU 13a \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Token của Fairseq.}
+Không có BPE trong nhánh E1/E3-custom, nên Fairseq đọc trực tiếp các đơn vị
+được ngăn cách bằng khoảng trắng trong corpus. Kiểm tra trên dữ liệu cho thấy
+357.806 token trong các tệp \texttt{.cn} đều dài đúng một ký tự, thuộc 5.386
+loại ký tự. Các tệp \texttt{.vi} đã được chuyển về chữ thường, bỏ dấu câu và
+tách theo âm tiết, gồm 401.997 token thuộc 3.607 loại. Chẳng hạn,
+\emph{viên ngoại lang} được tính là ba token, không phải một từ ghép duy nhất.
+
+Các con số này là đơn vị thực tế được dùng cho
+\texttt{max\_source\_positions}, \texttt{max\_len\_a/b} và ngân sách
+\texttt{max\_tokens\_per\_gpu}. Vì không có bước phân đoạn trung gian, thống
+kê độ dài trực tiếp trên tệp \texttt{.vi}/\texttt{.cn} cũng chính là thống kê
+mà encoder và decoder Fairseq nhìn thấy.
+
+\paragraph{Vì sao phía Hán văn dùng từng ký tự?}
+Hán văn cổ vốn được viết liền, không có khoảng trắng xác định ranh giới từ.
+Các bộ tách từ có sẵn như Jieba hoặc PKUSeg chủ yếu được huấn luyện trên tiếng
+Trung hiện đại; áp dụng trực tiếp cho văn ngôn có thể áp đặt các ranh giới từ
+hiện đại không phù hợp. Trong nhiều trường hợp, một Hán tự đồng thời mang vai
+trò gần với một hình vị, nên biểu diễn cấp ký tự là lựa chọn phù hợp với ngữ
+liệu này, thay vì chỉ là phương án dự phòng.
+
+Biểu diễn trên cũng giữ từ vựng đích ở quy mô nhỏ. Với ngưỡng tần suất bằng 1,
+mọi Hán tự xuất hiện trong tập train đều được giữ lại, nên không có
+\texttt{<unk>} do cắt bỏ token hiếm trong chính tập train. Tuy nhiên, ký tự chỉ
+xuất hiện ở validation hoặc test vẫn có thể nằm ngoài từ điển Fairseq; việc
+không dùng BPE không loại bỏ dạng OOV này.
+
+\paragraph{Vì sao phía tiếng Việt dùng âm tiết?}
+Chính tả tiếng Việt đã đặt khoảng trắng giữa các âm tiết, nên thao tác
+\texttt{split()} tạo ra một tokenizer xác định, không cần mô hình phụ hoặc
+dependency bên ngoài. Tách từ đầy đủ sẽ cần thêm công cụ như VnCoreNLP hoặc
+Underthesea, kéo theo một phiên bản phần mềm phải cố định và thêm nguồn sai số
+tiền xử lý.
+
+Trong corpus này, tiếng Việt mang nhiều âm đọc Hán--Việt, nên từng âm tiết
+thường ánh xạ khá trực tiếp sang một Hán tự. Giữ đơn vị âm tiết bảo toàn cấu
+trúc căn chỉnh gần đơn điệu và gần một--một, qua đó đơn giản hóa bài toán cho
+Transformer sáu lớp được huấn luyện trên khoảng 19 nghìn câu. Quan hệ này cũng
+giải thích vì sao trung vị tỷ lệ độ dài đích/nguồn xấp xỉ 0,86 thay vì biến
+động khó dự đoán.
+
+\paragraph{Vì sao Fairseq không dùng BPE?}
+BPE thường được dùng để giới hạn kích thước từ vựng và xử lý từ chưa gặp. Ở
+đây, từ vựng train của hai phía đã nhỏ, khoảng 3,6 nghìn loại tiếng Việt và
+5,4 nghìn Hán tự. Các phép gộp subword học từ chỉ 19 nghìn câu có thể tạo thêm
+một artifact tiền xử lý phải lưu phiên bản, đồng thời làm mờ ánh xạ gần
+một--một giữa âm tiết Hán--Việt và Hán tự. Cấu hình
+\texttt{threshold\_source: 1} và \texttt{threshold\_target: 1} giữ mọi loại
+token có mặt trong train, nên không có token nào bị đổi thành \texttt{<unk>}
+chỉ vì tần suất thấp.
+
+\paragraph{Token của Qwen3.}
+E2/E4 không đọc các đơn vị khoảng trắng nói trên như token mô hình. Toàn bộ
+prompt và câu trả lời được tokenizer BPE của Qwen3 phân đoạn thành subword;
+một âm tiết tiếng Việt hoặc một Hán tự có thể tương ứng với số token khác
+nhau. Vì vậy, số token và giới hạn sinh của nhánh LLM không thể so sánh trực
+tiếp với E1/E3-custom. Đây là lý do nhánh này dùng giới hạn rộng hơn:
+\[
+  \texttt{max\_new\_tokens}
+  =\min\!\left(512,\left\lceil2L_{\mathrm{src}}\right\rceil+32\right).
+\]
+
+\paragraph{Token dùng để chấm điểm.}
+Bước đánh giá cố ý định nghĩa một đơn vị thứ ba, độc lập với tokenizer của
+từng mô hình. Hàm \texttt{score\_form\_chinese}
+(\texttt{normalize.py:20}) xóa toàn bộ khoảng trắng khỏi dự đoán, sau đó chèn
+lại đúng một khoảng trắng giữa từng ký tự. SacreBLEU với tokenizer 13a vì thế
+tính các n-gram trên chuỗi Hán tự đã được chuẩn hóa; chrF++ cũng được tính với
+\texttt{whitespace=False} trên cùng nội dung.
+
+Việc chuẩn hóa này làm cho đầu ra Fairseq vốn có khoảng trắng và đầu ra Qwen3
+vốn viết liền trở thành cùng một biểu diễn trước khi chấm. Tại
+\texttt{evaluation.py:36--38}, pipeline còn tự tạo lại
+\texttt{prediction\_scored} và từ chối tệp nếu kết quả không khớp với trường
+đã lưu. Nhờ đó, một hệ thống không thể vô tình được chấm bằng cách token hóa
+khác các hệ thống còn lại.
+
+\paragraph{Ý nghĩa đối với phép so sánh E1 và E2.}
+Hai backend không dùng chung token ở cấp mô hình, nên phép so sánh chỉ có ý
+nghĩa khi cả hai được đưa về một token chấm điểm chung mà không backend nào
+được ưu tiên. Trong thí nghiệm này, đơn vị chung đó là từng Hán tự. Điều này
+cũng nối lại câu hỏi trước: vì Fairseq không dùng BPE, các thống kê trên tệp
+thô đúng bằng đơn vị mà decoder Fairseq đếm, nên có thể kiểm tra trực tiếp
+ngưỡng $1{,}2|x|+10$ trên corpus.
+
+\section{Lựa chọn checkpoint}
+
+\subsection{Tại sao E1 và E3-custom chọn theo BLEU validation, còn E2 chọn
+theo validation loss?}
+
+\quickanswer{E1 và E3-custom chọn checkpoint bằng BLEU validation với đúng cấu
+hình beam search dùng khi đánh giá cuối, nên tiêu chí lựa chọn gắn trực tiếp
+với chất lượng chuỗi dịch. E2 dùng response-only validation loss theo quy trình
+chuẩn của Hugging Face Trainer vì phép tính teacher forcing đơn giản và rẻ hơn
+sinh toàn bộ bản dịch. Tuy nhiên, lý do này là diễn giải hồi cứu; không có tài
+liệu cùng thời điểm chạy hoặc ablation xác nhận quyết định đó.}
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{Khác biệt trong tiêu chí lựa chọn checkpoint.}
+  \label{tab:qa-checkpoint-selection}
+  \begin{tabularx}{\linewidth}{
+    @{}
+    >{\raggedright\arraybackslash}p{2.4cm}
+    >{\raggedright\arraybackslash}p{3.2cm}
+    >{\raggedright\arraybackslash}p{3.2cm}
+    >{\raggedright\arraybackslash}X
+    @{}}
+    \toprule
+    Hệ thống & Tiêu chí & Cách đánh giá & Hạn chế chính \\
+    \midrule
+    E1, E3-custom
+      & BLEU validation lớn nhất
+      & Sinh tự hồi quy bằng cùng cấu hình beam search dùng ở test
+      & Chi phí sinh chuỗi cao hơn tính loss \\
+    E2
+      & Response-only validation loss nhỏ nhất
+      & Teacher forcing trong Hugging Face Trainer
+      & Không trực tiếp đo chất lượng dịch khi mô hình tự sinh \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{E1 và E3-custom.}
+Hai mô hình Fairseq được chọn theo BLEU trên tập validation. Mỗi checkpoint
+được giải mã bằng cùng kích thước beam, length penalty và giới hạn độ dài sẽ
+được dùng ở bước đánh giá cuối. Cách làm này đặt tiêu chí lựa chọn sát với mục
+tiêu chính của hệ thống: chất lượng toàn bộ chuỗi dịch khi mô hình tự sinh,
+thay vì chỉ dựa trên xác suất của từng token khi đã biết tiền tố đúng.
+
+Việc sinh validation định kỳ vẫn khả thi về tính toán vì E1 và E3-custom là
+các Transformer tương đối nhỏ. Lựa chọn bằng BLEU cũng tránh phụ thuộc vào
+cross-entropy validation có label smoothing của Fairseq. Giá trị loss này hữu
+ích để theo dõi tối ưu, nhưng thứ hạng checkpoint theo loss không nhất thiết
+trùng với thứ hạng theo BLEU cấp chuỗi.
+
+\paragraph{E2.}
+E2 chọn checkpoint có response-only validation loss nhỏ nhất thông qua quy
+trình chuẩn của Hugging Face Trainer. Loss chỉ được tính trên token của câu trả
+lời; các token thuộc system prompt và câu nguồn đã bị mask. Phép đánh giá dùng
+teacher forcing, nên toàn bộ câu đích đúng được cung cấp cho mô hình và loss có
+thể được tính trong một lượt forward, không cần chạy beam search.
+
+Nếu chọn E2 bằng BLEU, pipeline phải bổ sung một vòng đánh giá riêng: dựng lại
+prompt đúng định dạng chat, sinh tự hồi quy cho toàn bộ tập validation, tách
+phần trả lời, chuẩn hóa Hán tự rồi mới gọi bộ chấm điểm. Với mô hình nhân quả
+tám tỷ tham số và beam search, quy trình này tốn thời gian hơn đáng kể so với
+tính validation loss bằng teacher forcing.
+
+Tuy nhiên, repository không lưu một giải thích cùng thời điểm chạy cho lựa
+chọn này và cũng không có ablation so sánh checkpoint tốt nhất theo loss với
+checkpoint tốt nhất theo BLEU. Vì vậy, thuận lợi về tính toán và khả năng tích
+hợp với Trainer chỉ là cách tái dựng hợp lý từ implementation, không nên được
+trình bày như một quyết định thiết kế đã được xác minh.
+
+\paragraph{Hệ quả đối với phép so sánh.}
+Tiêu chí lựa chọn checkpoint chưa được đồng nhất hoàn toàn giữa ba hệ thống.
+Validation loss không label smoothing của E2 là một mục tiêu token-level hợp
+lệ trên dữ liệu giữ riêng, nhưng không đo trực tiếp chất lượng khi mô hình tự
+sinh và có thể xếp hạng checkpoint khác với BLEU. Ngược lại, BLEU phản ánh đầu
+ra tự hồi quy nhưng phụ thuộc vào cấu hình giải mã và tốn thêm chi phí sinh.
+
+Tất cả quyết định lựa chọn đều chỉ sử dụng validation; tập test không trực
+tiếp tham gia chọn checkpoint. Do đó, sự khác biệt này không phải rò rỉ test,
+nhưng vẫn là một yếu tố gây nhiễu khi so sánh E1/E3-custom với E2. Một thí
+nghiệm được kiểm soát tốt hơn nên chấm BLEU validation cho mọi checkpoint E2
+đã lưu, rồi báo cáo xem tiêu chí BLEU và validation loss có chọn cùng một
+checkpoint hay không.
+
+\section{Truy hồi tri thức trong E3-custom}
+
+\subsection{Câu đầu vào của E3-custom được tạo như thế nào?}
+
+\quickanswer{E3-custom không sao chép 64 token từ câu dịch tham chiếu. Trong
+bước tiền xử lý, hệ thống truy hồi tối đa 64 Hán tự ứng viên từ
+\texttt{knowledge.json}, xếp hạng chúng bằng thông tin câu nguồn và tần suất
+chỉ tính trên tập train, rồi nối chúng vào cuối câu tiếng Việt sau token phân
+cách \texttt{\_\_knowledge\_\_}.}
+
+\paragraph{Bước 1: xây dựng chỉ mục tra cứu.}
+Mỗi mục Hán tự trong \texttt{knowledge.json} được liên kết với các dạng tra
+cứu tiếng Việt lấy từ bốn trường:
+\begin{itemize}
+  \item \texttt{pronunciation};
+  \item \texttt{nom\_query};
+  \item \texttt{lookup\_query};
+  \item \texttt{query\_variants}.
+\end{itemize}
+Các dạng này được chuẩn hóa rồi dùng làm khóa ánh xạ tới một hoặc nhiều Hán
+tự. Chẳng hạn, dạng tiếng Việt \emph{lê} có thể trỏ tới nhiều ứng viên, trong
+đó có ký tự 黎.
+
+\paragraph{Bước 2: tìm các đoạn khớp trong câu nguồn.}
+Retriever trượt qua mọi đoạn token liên tiếp của câu tiếng Việt và kiểm tra
+xem đoạn đó có trùng với một dạng tra cứu trong chỉ mục hay không. Một đoạn
+tiếng Việt có thể đề xuất nhiều Hán tự; ngược lại, cùng một Hán tự có thể được
+đề xuất bởi nhiều đoạn khác nhau. Vì vậy, khoảng 20 đoạn khớp trong một câu có
+thể tạo ra hơn 60 ứng viên phân biệt.
+
+\paragraph{Bước 3: tính điểm từng ứng viên.}
+Sau khi gộp các ứng viên trùng nhau, điểm chính của một ký tự $c$ là số đoạn
+nguồn đã truy hồi ra ký tự đó:
+\begin{equation}
+  \operatorname{score}(c)
+  =\operatorname{match\_count}(c).
+\end{equation}
+Một ký tự được nhiều đoạn nguồn cùng đề xuất sẽ có độ ưu tiên cao hơn ký tự
+chỉ xuất hiện từ một lần khớp.
+
+\paragraph{Bước 4: xếp hạng xác định.}
+Các ứng viên được sắp xếp lần lượt theo:
+\[
+  \text{số lần khớp giảm dần}
+  \;\rightarrow\;
+  \text{tần suất đích trong train giảm dần}
+  \;\rightarrow\;
+  \text{thứ tự Unicode}.
+\]
+Tần suất Hán tự trong câu đích train chỉ đóng vai trò phá hòa khi hai ứng viên
+có cùng số lần khớp. Câu dịch tham chiếu của mẫu đang xử lý không được xem;
+câu đích validation và test cũng không tham gia xây chỉ mục tần suất. Quy tắc
+Unicode cuối cùng giúp kết quả hoàn toàn xác định khi hai tiêu chí đầu vẫn
+bằng nhau.
+
+\paragraph{Bước 5: nối ứng viên vào câu nguồn.}
+Sau khi xếp hạng, hệ thống lấy các ứng viên đứng đầu và tạo chuỗi:
+\[
+  \underbrace{\text{câu tiếng Việt}}_{\text{nguồn gốc}}
+  \quad
+  \texttt{\_\_knowledge\_\_}
+  \quad
+  c_1\;c_2\;\cdots\;c_k,
+\]
+trong đó
+\begin{equation}
+  k=\min\!\left(
+    64,\;
+    \text{số ứng viên truy hồi},\;
+    256-L_{\mathrm{src}}-1
+  \right).
+\end{equation}
+Thành phần cuối dành một vị trí cho token phân cách và bảo đảm chuỗi mở rộng
+không vượt giới hạn 256 vị trí của encoder E3-custom.
+
+Ví dụ, một câu nguồn sau khi bổ sung tri thức có dạng:
+\begin{quote}
+  \small\ttfamily
+  tôn mẹ là lê thị làm linh hiển\\
+  \_\_knowledge\_\_\\
+  黎 是 宗 令 侍 氏 尊 孫 母 視 靈 羅 \ldots
+\end{quote}
+Các Hán tự được phân tách bằng khoảng trắng, nên Fairseq coi mỗi ứng viên là
+một token phía nguồn. Token \texttt{\_\_knowledge\_\_} đánh dấu ranh giới
+giữa câu tiếng Việt gốc và khối gợi ý, cho phép encoder học cách sử dụng hoặc
+bỏ qua phần tri thức bổ sung.
+
+\paragraph{Số lượng ứng viên thực tế.}
+Không phải câu nào cũng nhận đúng 64 ứng viên, vì số lượng còn phụ thuộc vào
+kết quả truy hồi và số vị trí encoder còn trống.
+\begin{table}[H]
+  \centering
+  \small
+  \caption{Số Hán tự ứng viên được nối vào mỗi câu.}
+  \label{tab:qa-e3-candidates}
+  \begin{tabular}{lrr}
+    \toprule
+    Phân hoạch & Trung bình & Lớn nhất \\
+    \midrule
+    Train & 61,53 & 64 \\
+    Validation & 62,41 & 64 \\
+    Test & 61,98 & 64 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+Mọi câu đều nhận ít nhất một gợi ý và phần lớn gần chạm trần. Điều này cho
+thấy retriever có độ phủ cao nhưng khả năng chọn lọc thấp: nhiều Hán tự được
+nối vào có thể không liên quan tới bản dịch cần sinh. Ngoài ra, một số ký tự
+gợi ý chỉ xuất hiện ở validation hoặc test sẽ trở thành \texttt{<unk>} nếu
+chúng không có trong từ vựng nguồn được xây từ train.
+
+\paragraph{Vì sao giới hạn là 64?}
+Không có tài liệu ghi lại lý do lựa chọn hoặc ablation cho giá trị 64. Cấu hình
+\texttt{configs/e3\_custom\_fairseq\_knowledge.yaml:12} chỉ cố định
+\texttt{max\_candidates: 64}; việc khớp, xếp hạng và nối ứng viên được triển
+khai tại \texttt{code/mt\_pipeline/knowledge.py:80}. Do đó, 64 nên được mô tả
+là một ngân sách ứng viên cố định của lần chạy, không phải giá trị đã được tối
+ưu thực nghiệm.
+
+\end{document}

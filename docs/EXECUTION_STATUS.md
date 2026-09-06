@@ -1,5 +1,10 @@
 # Local execution status - 2026-08-16
 
+Evaluation update (2026-09-06): saved predictions were rescored with `moses-char-v1`
+into `metrics/moses/`. All eight corpus metric files and all numerical statistics
+in the three paired comparisons are unchanged. Original artifacts and checkpoint
+selection history remain intact. See [Moses evaluation](MOSES_EVALUATION.md).
+
 This file records only results backed by the current workspace artifacts.
 
 ## Completed experiments

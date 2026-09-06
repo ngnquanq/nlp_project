@@ -24,7 +24,9 @@
 
 ## Results
 
-Insert the verified SacreBLEU, chrF++, signatures, and paired-bootstrap comparison.
+Insert the verified scores and paired-bootstrap comparison from `metrics/moses/`.
+Include BLEU's Moses preprocessing metadata alongside both metric signatures and
+state that Chinese character segmentation is retained.
 
 ## Error analysis
 
@@ -37,4 +39,3 @@ Contrast system behavior and state corpus, metric, compute, and E3 limitations.
 ## Reproducibility
 
 Show configs, private checkpoints, prediction schema, hashes, and one-command evaluation.
-

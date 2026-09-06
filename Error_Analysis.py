@@ -1,6 +1,7 @@
 import pandas as pd
 import difflib
 from collections import Counter
+import re  # <--- Bổ sung thư viện Regular Expression
 
 # 1. KNOWLEDGE BASE
 
@@ -92,6 +93,25 @@ def evaluate_pipeline(row):
         row['CORRECT'] = 1
         row['Notes'] = "Exact"
         return row
+        
+    # ==========================================
+    # BƯỚC MỚI: KIỂM TRA LỖI KỸ THUẬT (OTHER)
+    # ==========================================
+    
+    # 0.1 Lỗi Code-Switching (Phát hiện chữ Quốc ngữ / Latin)
+    if re.search(r'[a-zA-Z]', pred_raw):
+        row['OTHER'] = 1
+        row['Notes'] = "Code-Switching"
+        return row  # Thoát sớm để không bắt nhầm Omission/Addition
+        
+    # 0.2 Lỗi Sụp đổ vòng lặp (Infinite Looping)
+    # Tìm các cụm từ (>= 2 ký tự) bị lặp lại LIÊN TIẾP từ 4 lần trở lên
+    if re.search(r'(.{2,})\1{3,}', pred_raw):
+        row['OTHER'] = 1
+        row['Notes'] = "Infinite Looping"
+        return row  # Thoát sớm để không bắt nhầm Unsupported Addition
+        
+    # ==========================================
         
     # 1. Advanced Number & Time Error Checking
     ref_nums = parse_chinese_number(ref)

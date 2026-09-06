@@ -1,0 +1,78 @@
+\section{Error Analysis}
+\subsection{Hệ thống phân loại lỗi (Error Taxonomy)}
+Hệ thống phân loại lỗi dịch gồm các nhóm chính:
+\begin{enumerate}
+\item \texttt{CORRECT}: Bản dịch chính xác hoàn toàn (độc lập với các nhãn lỗi khác).
+\item \texttt{MISTRANSLATION}: Sai lệch ngữ nghĩa nội dung, ngoại trừ các phân loại cụ thể bên dưới.
+\item \texttt{OMISSION}: Thiếu vắng thông tin cốt lõi từ văn bản nguồn.
+\item \texttt{UNSUPPORTED\_ADDITION}: Tự ý chèn thông tin ngoài ngữ cảnh (không áp dụng cho trường hợp paraphrase thuần túy).
+\item \texttt{ENTITY\_ERROR}: Sai lệch tên người, địa danh, triều đại, chức tước.
+\item \texttt{NUMBER\_OR\_TIME\_ERROR}: Sai lệch số lượng, ngày tháng, niên hiệu hoặc can chi.
+\item \texttt{OTHER}: Các vấn đề dị biệt cấu trúc chưa phân loại.
+\end{enumerate}  \subsection{Phương pháp phân tích (Error Analysis Methodology)}
+Áp dụng khung tự động hóa dựa trên luật (Rule-based pipeline) đối chiếu câu chuẩn (Reference) và câu dịch (Prediction), để phân loại thành 7 nhãn lỗi dịch thuật.
+\begin{enumerate}
+\item Loại bỏ các hư từ (STOPWORDS) không mang ngữ nghĩa cốt lõi. Đưa các dị thể, biến thể về chung một chuẩn bằng từ điển đồng nghĩa (SYNONYM\_MAP).
+\item Logic phân loại lỗi:
+
+\begin{itemize}
+\item CORRECT: Câu khớp hoàn toàn hoặc có khác biệt nhưng độ phủ từ vựng đạt ngưỡng rất cao (từ 95\% trở lên).
+
+\item NUMBER\_OR\_TIME\_ERROR: Sai lệch về giá trị số học hoặc tập hợp từ khóa thời gian.
+
+\item ENTITY\_ERROR & UNSUPPORTED\_ADDITION: Mất thực thể (Omission) hoặc sinh thừa thực thể ngoài ngữ cảnh (Addition).
+
+\item OMISSION: Bị thiếu từ 2-3 token có nghĩa (câu ngắn từ 6 chữ trở xuống là $\geq 2$, câu dài trên 6 chữ là $\geq 3$).\\
+(Cơ sở ngôn ngữ học: Hán văn cổ cực kỳ cô đọng, mỗi chữ Hán thường đại diện cho một khái niệm độc lập. Sự sai khác 1-2 chữ có thể chỉ là do dùng từ đồng nghĩa hoặc hư từ; nhưng khi chênh lệch chạm mốc 3 chữ, nó tương đương với việc mất đi (hoặc chêm vào) một cụm danh/động từ hoàn chỉnh.)
+
+\item UNSUPPORTED\_ADDITION: Bị thừa token mới kết hợp với việc độ dài câu dịch dài hơn 115\% so với câu gốc.
+
+\item MISTRANSLATION: khi câu bị sai lệch (độ phủ < 95\%) nhưng không vi phạm bất kỳ lỗi cụ thể nào về số, thời gian, thực thể, bỏ sót hay chèn thừa ở trên.
+\end{itemize}
+
+\end{enumerate}
+
+Cuối cùng nhóm nghiên cứu tiến hành rà soát và tinh chỉnh thủ công.
+
+\subsection{Phân bố và So sánh Lỗi (Error Distribution \& Comparison)}
+Bảng dưới đây tổng hợp kết quả định lượng chính xác từ tệp dữ liệu thực nghiệm đã gán nhãn trên 100 câu kiểm tra (tham chiếu dữ liệu từ tệp \texttt{Error\_Analysis\_Labeled\_3.xlsx}):
+
+\begin{table}[htbp]
+    \centering
+    \caption{Phân loại lỗi thực tế của các mô hình}
+    \label{tab:error_classification}
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}p{0.28\textwidth}
+        >{\centering\arraybackslash}X
+        >{\centering\arraybackslash}X
+        >{\centering\arraybackslash}X
+    }
+        \toprule
+        \textbf{Nhãn Phân Loại Lỗi} 
+        & \textbf{Mô hình e1 (Fairseq)} 
+        & \textbf{Mô hình e2 (Qwen3-8B QLoRA)} 
+        & \textbf{Mô hình e3 (Retrieval)} \\
+        \midrule
+        \texttt{CORRECT} & 9 (9.0\%) & \textbf{13 (13.0\%)} & 10 (10.0\%) \\
+        \texttt{MISTRANSLATION} & 13 (13.0\%) & \textbf{9 (9.0\%)} & 13 (13.0\%) \\
+        \texttt{OMISSION} & 76 (76.0\%) & \textbf{68 (68.0\%)} & 72 (72.0\%) \\
+        \texttt{UNSUPPORTED\_ADDITION} & 18 (18.0\%) & \textbf{17 (17.0\%)} & 17 (17.0\%) \\
+        \texttt{ENTITY\_ERROR} & 10 (10.0\%) & \textbf{5 (5.0\%)} & 8 (8.0\%) \\
+        \texttt{NUMBER\_OR\_TIME\_ERROR} & 22 (22.0\%) & \textbf{17 (17.0\%)} & 29 (29.0\%)\\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\textbf{Phân tích Đặc trưng Kiến trúc (Architectural Analysis):}
+\begin{itemize}
+\item \textbf{Mô hình e1 (Fairseq - Baseline):} Với giới hạn của kiến trúc mã hóa - giải mã (Encoder-Decoder) dung lượng nhỏ, e1 bộc lộ điểm nghẽn nghiêm trọng khi xử lý cấu trúc phức tạp của cổ văn. Tỷ lệ bỏ sót thông tin (\texttt{OMISSION}) lên tới 76.0\% kết hợp với 22.0\% lỗi số liệu (\texttt{NUMBER\_OR\_TIME\_ERROR}) cho thấy mô hình thường xuyên đánh mất ngữ cảnh (context dropping). Càng về cuối câu, e1 càng đuối sức và có xu hướng cắt xén các cụm bổ ngữ quan trọng.
+\item \textbf{Mô hình e2 (Qwen3-8B QLoRA):} Thể hiện sự toàn diện nhờ nền tảng tri thức khổng lồ của LLM. Mô hình này không chỉ đạt tỷ lệ dịch hoàn hảo cao nhất (\texttt{CORRECT} 13.0\%) mà còn làm chủ được các tiểu tiết khó: tỷ lệ sai thực thể (\texttt{ENTITY\_ERROR}) xuống mức 5.0\% và lỗi dịch sai (\texttt{MISTRANSLATION}) chỉ 9.0\%. Khả năng tổng quát hóa ngữ cảnh sâu rộng giúp e2 ghi nhớ cực tốt tước hiệu và địa danh lịch sử.
+\item \textbf{Mô hình e3 (Knowledge-Retrieval):} Dù cải thiện tỷ lệ đúng so với e1 (đạt 10.0\%), kiến trúc này chịu tác dụng ngượcvề mặt số liệu. Việc tích hợp bộ truy xuất chưa qua màng lọc khắt khe đã đẩy tỷ lệ lỗi thời gian/số lượng (\texttt{NUMBER\_OR\_TIME\_ERROR}) lên 29.0\%, do mô hình ưu tiên lấy nhầm các mốc thời gian từ ngữ cảnh bên ngoài thay vì câu gốc.
+\end{itemize}
+
+\subsection{Hiện tượng Ảo giác (Hallucination Phenomenon)}
+Sự khác biệt về cơ chế giải mã sinh ra hai hình thái ảo giác đặc trưng:
+\begin{itemize}
+\item \textbf{Ảo giác nội sinh (Intrinsic Hallucination - Phổ biến ở e2):} Bắt nguồn từ bản chất sinh tạo tự do của LLM. Trong nỗ lực làm mượt văn bản, mô hình cố gắng đoán ý và tự ý chêm thêm các hư từ, trạng từ liên kết, hoặc thay đổi cấu trúc câu để phù hợp với văn phong ngôn ngữ hiện đại đã học trong giai đoạn tiền huấn luyện (Pre-training), kích hoạt lỗi \texttt{UNSUPPORTED\_ADDITION}.
+\item \textbf{Ảo giác ngoại sinh (Extrinsic Hallucination - Cố hữu ở e3):} Đến từ sự bất định của module truy xuất. Do lịch sử Hán Nôm thường có các sự kiện, tên nhân vật, địa danh lặp lại qua nhiều triều đại, bộ truy xuất dễ lấy nhầm các văn bản ngoại biên. Hậu quả là bộ giải mã bị ép phải nhét các niên hiệu, con số hoặc nhân vật hoàn toàn sai lệch từ văn bản nhiễu vào bản dịch.
+\end{itemize}

@@ -6,6 +6,7 @@ Before submission, append a dated log for every further material use:
 
 | Date | Tool/model | Task | Human verification |
 |---|---|---|---|
+| 2026-09-06 | OpenAI Codex | Moses evaluation migration, notebook compatibility, saved-output rescoring, and code-only specification audit | Automated checks: 54 tests, data audit, artifact verification, unchanged scores and bootstrap statistics. Human code review remains pending; see `docs/CODE_SPEC_AUDIT.md` for remaining gaps. |
 | 2026-08-15 | OpenAI Codex | Initial pipeline implementation | Code and tests must be reviewed and GPU runs verified by the group |
 | 2026-08-16 | Claude (Claude Code) | Reproducibility audit of E1/E2/E3: re-derived all 12 stored metrics from saved predictions and re-ran the three paired bootstraps at seed 42 | Reproduced numbers match `metrics/*.json` exactly; group to confirm the reported findings |
 | 2026-08-16 | Claude (Claude Code) | Found E1's checkpoint was warm-started from an interrupted run (`train.log:268`), and E2's config was edited 12 min after its test predictions, breaking its frozen-selection chain | Both confirmed from saved logs and hashes; group to decide how to report the E2 caveat |
@@ -16,4 +17,3 @@ Before submission, append a dated log for every further material use:
 | 2026-08-16 | Claude (Claude Code) | E4 knowledge-augmented QLoRA: `knowledge.py` split into retrieval core plus per-backend renderers, `qlora_knowledge` backend, `knowledge-preflight` cost measurement | E3's Fairseq output pinned byte-identical by regression test; group must run and validate E4 itself |
 
 The group remains responsible for understanding the code, reviewing generated commands, validating every metric against saved predictions, checking citations, and ensuring that no result or interpretation is fabricated.
-

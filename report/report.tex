@@ -1,0 +1,614 @@
+% !TEX program = xelatex
+% Build in this directory: latexmk -xelatex -interaction=nonstopmode -halt-on-error report.tex
+% Alignment audit: 2026-09-06. Evidence: code/mt_pipeline/, configs/,
+% work/*/run_manifest.json, Trainer state, metrics/moses/, and annotation status.
+% Existing artifacts were inspected, not regenerated or relabeled.
+\documentclass[11pt,twocolumn]{article}
+
+\usepackage{natbib}
+\usepackage{my-template}
+\usepackage{microtype}
+\usepackage{caption}
+
+\setlength{\columnsep}{0.6cm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{7pt plus 2pt minus 2pt}
+\setlength{\intextsep}{7pt plus 2pt minus 2pt}
+\renewcommand{\arraystretch}{1.08}
+\renewcommand{\abstractname}{Tóm tắt}
+\renewcommand{\refname}{Tài liệu tham khảo}
+\renewcommand{\figurename}{Hình}
+\renewcommand{\tablename}{Bảng}
+\captionsetup{font=small}
+\setcitestyle{authoryear,round}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0pt}
+  \fancyfoot[R]{Trang \thepage}
+}
+\sloppy
+\raggedbottom
+
+\title{Dịch máy từ tiếng Việt sang Hán văn cổ}
+
+\author{
+Phạm Thị Ánh Phát \quad Nguyễn Nhật Quang\\
+Lê Hoàng Như \quad Đinh Phan Khánh Vũ\\
+Trường Đại học Khoa học Tự nhiên, ĐHQG-HCM\\
+\texttt{25C01040, 25C23002, 25C23014, 25C23018}
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+
+Nghiên cứu này tập trung vào bài toán dịch từ văn bản tiếng Việt sang văn bản Hán cổ trên một ngữ liệu song song chuyên biệt, quy mô nhỏ, thuộc lĩnh vực lịch sử, được xây dựng từ \textit{Đại Việt sử ký toàn thư}. Tập huấn luyện gồm 19.218 cặp câu; Tập validation và tập test mỗi tập gồm 510 cặp câu.
+Ba thí nghiệm được so sánh gồm Transformer huấn luyện từ đầu bằng Fairseq (E1),
+Qwen3-8B thích nghi bằng QLoRA 4-bit (E2), và Transformer bổ sung gợi ý Hán tự
+ở phía nguồn (E3-custom). Đầu ra được chuẩn hóa cấp ký tự, chấm BLEU với
+Moses và SacreBLEU, cùng chrF++ và bootstrap theo cặp. Trên tập test, E2 đạt
+40,77 BLEU và 40,87 chrF++, cao hơn E1 lần lượt 12,14 và 10,29 điểm
+($p=0{,}002$ cho cả hai chỉ số). E3-custom cải thiện nhẹ nhưng chưa đạt
+ý nghĩa thống kê. Các điểm số này được kiểm chứng từ dự đoán đã lưu;
+chuỗi xác minh cấu hình của lượt E2 lịch sử còn hạn chế. Quy trình phân tích
+lỗi đã được chuẩn bị nhưng chưa hoàn tất gán nhãn thủ công, nên báo cáo
+không đưa ra tỷ lệ lỗi hay kết luận về độ chính xác thực thể và thời gian.
+
+\end{abstract}
+
+\section{Giới thiệu}
+
+Mô hình dịch máy nơ-ron học phân phối xác suất của câu đích với điều kiện là câu nguồn. Transformer \citep{vaswani2017attention} là một kiến trúc hiệu quả cho bài toán dịch máy này, nhưng chất lượng mô hình phụ thuộc mạnh vào độ lớn của mô hình, các quyết định kiến trúc, độ tin
+cậy của ngữ liệu song song. Trong bối cảnh tài nguyên tính toán thấp và số lượng mẫu câu không quá lớn, các cấu hình mà cả ba thí nghiệm lựa chọn đều được thiết kế cho dữ liệu lớn có thể quá khớp hoặc không học được những ánh xạ hiếm; Batch nhỏ thậm chí có thể tạo hiệu ứng điều chuẩn hữu ích \citep{atrio2021small}.
+
+Dịch từ tiếng Việt sang Hán văn cổ đặc biệt khó. Ngôn ngữ đích có tính hàm súc, thường lược bỏ những thành phần có thể suy ra từ ngữ cảnh và chứa nhiều tên người, chức quan, địa danh, niên hiệu cùng biểu thức lịch pháp mang tính lịch sử. Chỉ một Hán tự sai cũng có thể làm thay đổi thực thể hoặc thời điểm, dù phần còn lại của câu vẫn gần với tham chiếu. Trong ngữ liệu của đề tài, câu nguồn là tiếng Việt tương đối hiện đại, còn câu đích là Hán văn cổ trích từ một bộ sử. Vì vậy, bài toán đồng thời đòi hỏi năng lực dịch, thích nghi miền, chuyển tự và bảo toàn dữ kiện.
+
+Nghiên cứu đối chiếu một Transformer truyền thống được huấn luyện từ đầu với một mô hình ngôn ngữ lớn tiền huấn luyện được thích nghi bằng QLoRA. Bên cạnh đó, một phương pháp truy hồi thử nghiệm được đánh giá bằng cách nối các Hán tự ứng viên vào câu nguồn tiếng Việt. Các đóng góp chính gồm:
+
+\begin{itemize}
+  \item so sánh có thể chấm lại từ dự đoán đã lưu giữa NMT huấn luyện từ đầu và LLM được
+  thích nghi hiệu quả tham số trên các phân hoạch train, validation và test
+  cố định;
+  \item xây dựng quy trình đánh giá cấp ký tự thống nhất bằng SacreBLEU,
+  chrF++ và khoảng tin cậy bootstrap theo cặp; và
+  \item chuẩn bị quy trình phân tích lỗi đa nhãn trên cùng 100 câu test
+  cho mỗi hệ thống; việc gán nhãn thủ công còn chưa hoàn tất.
+\end{itemize}
+
+% \section{Công trình liên quan}
+
+% Transformer thay phép tính hồi quy bằng attention đa đầu và vẫn là một kiến
+% trúc nền tảng của NMT \citep{vaswani2017attention}. Nghiên cứu sử dụng Fairseq
+% \citep{ott2019fairseq} để xây dựng baseline huấn luyện từ đầu. Mô hình hóa dưới
+% từ thường hỗ trợ dịch từ hiếm \citep{sennrich2016subword}; tuy nhiên, phía đích
+% của ngữ liệu đã được phân tách thành từng Hán tự, nên các thí nghiệm giữ nguyên
+% cách tách token được cung cấp để tránh đưa thêm một mô hình phân đoạn học được
+% vào quy trình.
+
+% Mô hình ngôn ngữ lớn tiền huấn luyện cung cấp một hướng khác cho dịch máy tài
+% nguyên thấp. LoRA biểu diễn cập nhật của một ma trận trọng số đóng băng bằng
+% hai nhân tử hạng thấp \citep{hu2021lora}. QLoRA kết hợp cơ chế này với trọng số
+% nền đã lượng tử hóa, qua đó giảm đáng kể yêu cầu bộ nhớ
+% \citep{dettmers2023qlora}. Nghiên cứu áp dụng QLoRA cho Qwen3-8B
+% \citep{qwen3technicalreport}, cho phép thích nghi mô hình trên một GPU có
+% 12,5~GB bộ nhớ.
+
+% BLEU \citep{papineni2002bleu} được tính bằng SacreBLEU
+% \citep{post2018sacrebleu}, còn chrF++ được sử dụng theo
+% \citet{popovic2015chrf,popovic2017chrfpp}. Do câu tham chiếu có khoảng trắng
+% giữa từng Hán tự, các điểm số này chủ yếu phản ánh mức độ trùng khớp chuỗi ở
+% cấp ký tự thay vì BLEU cấp từ theo cách đánh giá dịch máy thông thường.
+
+\section{Dữ liệu}
+
+Ngữ liệu được xây dựng từ \textit{Đại Việt sử ký toàn thư}. Tập train được căn
+chỉnh tự động và được xem là dữ liệu \textit{silver}; tập validation và test
+được căn chỉnh thủ công và được xem là dữ liệu \textit{gold}
+\citep{projectspec2026}. Bảng~\ref{tab:data} tóm tắt các phân hoạch cố định.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Thống kê ngữ liệu song song. Độ dài tính theo token phân cách bằng
+khoảng trắng, không phải kết quả phân đoạn từ tiếng Việt.}
+\label{tab:data}
+\begin{tabular}{lrrrr}
+\toprule
+Tập & Số cặp & Duy nhất & Việt & Hán \\
+\midrule
+Train & 19.218 & 17.622 & 20,92 & 18,62 \\
+Validation & 510 & 510 & 20,32 & 17,47 \\
+Test & 510 & 510 & 20,66 & 17,61 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tập train chứa 1.596 cặp lặp lại, tương đương 8,3\%. Phía tiếng Việt có
+401.997 token thuộc 3.607 loại từ; phía Hán văn có 357.806 token thuộc 5.386
+loại ký tự. Phân bố có đuôi dài rõ rệt: 507 loại từ tiếng Việt và 1.137 Hán tự
+chỉ xuất hiện một lần. Không có câu tiếng Việt, câu Hán hoặc cặp song ngữ trùng
+khớp chính xác giữa các phân hoạch.
+
+Mọi tập dữ liệu đi qua cùng một hàm đọc đầu vào. Văn bản được chuẩn hóa Unicode
+NFC, các chuỗi khoảng trắng liên tiếp được gộp lại và mỗi cặp câu được gán một
+định danh ổn định. Tiếng Việt đã được chuyển về chữ thường và dấu câu đã được
+loại khỏi ngữ liệu cung cấp. Các Hán tự phía đích được phân cách bằng khoảng
+trắng. Nghiên cứu duy trì ba biểu diễn của câu đích: chuỗi đã tách token cho
+Fairseq, chuỗi viết liền cho huấn luyện Qwen và hiển thị, cùng chuỗi chuẩn hóa
+cấp ký tự để chấm điểm. Phép chuyển đổi vòng này bảo đảm mọi hệ thống được đánh
+giá với cùng cách tách token.
+
+Kho tri thức bổ trợ dành cho E3-custom cung cấp âm đọc, nghĩa, cấu tạo và ví dụ
+của 16.000 Hán/Nôm tự; E3-custom chỉ dùng các biểu thức tra cứu để tạo gợi ý.
+Tần suất dùng để xếp hạng được xây dựng từ tập train; các câu đích của validation và test không tham gia
+vào quá trình truy hồi hoặc xếp hạng ứng viên.
+
+\section{Các thí nghiệm}
+Hình~\ref{fig:pipeline} trình bày các bước dữ liệu và đánh giá dùng chung cùng
+ba nhánh mô hình riêng biệt.
+
+\begin{figure*}[t]
+  \centering
+  \begin{tikzpicture}[>=Stealth, every node/.style={font=\small,align=center}]
+    \node (data) at (0,0) {Dữ liệu cố định\\NFC, ID, kiểm tra phân hoạch};
+    \node (e1) at (-4,-1.3) {E1\\Token khoảng trắng\\Transformer};
+    \node (e2) at (0,-1.3) {E2\\Chat + tokenizer Qwen\\QLoRA};
+    \node (e3) at (4,-1.3) {E3-custom\\Nguồn + gợi ý Hán tự\\Transformer};
+    \node (select) at (0,-2.7) {Chọn checkpoint trên validation\\E1/E3: BLEU nội bộ; E2: loss};
+    \node (eval) at (0,-4.0) {Dự đoán test $\to$ chuẩn hóa ký tự\\BLEU: Moses + SacreBLEU; chrF++; bootstrap};
+    \draw[->] (data) -- (e1); \draw[->] (data) -- (e2); \draw[->] (data) -- (e3);
+    \draw[->] (e1) -- (select); \draw[->] (e2) -- (select); \draw[->] (e3) -- (select);
+    \draw[->] (select) -- (eval);
+  \end{tikzpicture}
+  \caption{Quy trình thực nghiệm. E1 huấn luyện Transformer từ đầu; E2 thích
+  nghi Qwen3-8B đã lượng tử hóa; E3-custom bổ sung các gợi ý Hán tự được truy
+  hồi vào câu nguồn Fairseq. Sơ đồ mô tả quy trình dự kiến; hạn chế xác minh
+  bản ghi đóng băng của E2 lịch sử được nêu trong phần tái lập.}
+  \label{fig:pipeline}
+\end{figure*}
+
+\subsection{Các bước tiền xử lí dữ liệu}
+
+Ba phân hoạch train, validation và test được xử lí bằng cùng một quy trình.
+Trước tiên, hệ thống kiểm tra số dòng giữa câu nguồn và câu đích, đối chiếu với
+cấu hình và gán định danh cố định cho từng cặp câu. Văn bản ở cả hai phía được
+chuẩn hóa Unicode NFC, loại khoảng trắng ở hai đầu và gộp các khoảng trắng liên
+tiếp thành một dấu cách.
+
+Câu Hán văn được lưu dưới ba dạng: chuỗi tách từng ký tự cho Fairseq, chuỗi
+viết liền cho Qwen3 và chuỗi chuẩn hóa cấp ký tự để chấm BLEU/chrF++. E1 dùng
+trực tiếp dữ liệu phân tách bằng khoảng trắng mà không áp dụng BPE; E2 chuyển
+mỗi cặp câu sang định dạng hội thoại và chỉ tính loss trên câu trả lời;
+E3-custom nối thêm các Hán tự ứng viên sau token
+\texttt{\_\_knowledge\_\_}. Thống kê truy hồi chỉ được xây dựng từ tập train
+để tránh rò rỉ dữ liệu validation và test.
+
+\subsection{E1: Transformer huấn luyện từ đầu}
+
+Transformer là mô hình học sâu theo kiến trúc encoder--decoder,
+mô hình này không xử lý tuần tự bằng RNN hoặc LSTM. Thay vào đó, mô hình sử dụng cơ
+chế attention để mỗi vị trí có thể truy cập trực tiếp thông tin ở mọi vị trí
+khác trong câu \citep{vaswani2017attention}. Token đầu vào trước tiên được ánh
+xạ thành embedding và cộng với biểu diễn vị trí để mô hình phân biệt thứ tự
+từ. Mỗi lớp encoder gồm một khối self-attention đa đầu và một mạng truyền thẳng
+theo từng vị trí; kết nối residual cùng layer normalization được dùng quanh
+mỗi khối để ổn định quá trình tối ưu.
+
+Trong một đầu attention, biểu diễn đầu vào được chiếu thành ba ma trận query
+$Q$, key $K$ và value $V$. Trọng số attention được tính bằng tích vô hướng đã
+chuẩn hóa:
+\begin{equation}
+\operatorname{Attention}(Q,K,V)
+=\operatorname{softmax}\!\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V.
+\end{equation}
+Tích $QK^{\top}$ đo mức liên quan giữa các vị trí; phép chia cho
+$\sqrt{d_k}$ tránh giá trị quá lớn làm softmax bão hòa. Multi-head attention
+thực hiện phép tính này song song trên nhiều không gian biểu diễn rồi nối kết
+quả lại. Nhờ đó, các đầu khác nhau có thể học quan hệ cú pháp, phụ thuộc xa,
+thực thể hoặc ánh xạ từ vựng khác nhau. Đặc điểm không có hồi quy cũng cho phép
+encoder xử lý đồng thời toàn bộ câu nguồn khi huấn luyện.
+
+Decoder sinh câu Hán theo chiều từ trái sang phải. Mỗi lớp decoder lần lượt
+thực hiện masked self-attention trên các token đích đã biết, cross-attention
+đến đầu ra của encoder, rồi đi qua mạng truyền thẳng. Causal mask che các vị
+trí tương lai, bảo đảm dự đoán tại bước $t$ chỉ phụ thuộc câu nguồn $x$ và các
+token đã có $y_{<t}$. Xác suất câu đích được phân rã thành
+\begin{equation}
+p(y\mid x)=\prod_{t=1}^{T}p(y_t\mid y_{<t},x).
+\end{equation}
+
+Trong E1, encoder và decoder đều có sáu lớp, kích thước biểu diễn là 512, tầng
+truyền thẳng có 2.048 chiều, attention gồm tám đầu và dropout bằng 0,1.
+Embedding đầu vào và ma trận chiếu đầu ra của decoder dùng chung trọng số. Mô
+hình có 67,65 triệu tham số và toàn bộ tham số được học từ tập train. Khi huấn
+luyện, decoder nhận các token đích đúng ở bước trước theo cơ chế teacher
+forcing. Hàm mục tiêu là cross-entropy có label smoothing với
+$\epsilon=0{,}1$:
+\begin{equation}
+\mathcal{L}_{\mathrm{E1}}=-\sum_t\sum_{v\in V}
+q_t(v)\log p(v\mid y_{<t},x).
+\end{equation}
+Trong triển khai Fairseq, $q_t(y_t)=1-\epsilon$ và
+$q_t(v)=\epsilon/(|V|-1)$ với $v\ne y_t$; các vị trí padding không tính loss.
+Bộ tối ưu Adam sử dụng learning rate cực đại $5\times10^{-4}$, lịch giảm
+inverse-square-root và 8.000 update warmup. Ngân sách batch hiệu dụng xấp xỉ
+4.000 token; checkpoint tốt nhất được chọn theo BLEU trên tập validation.
+
+Khi suy luận, quá trình giải mã
+bắt đầu bằng token đầu câu, tính phân phối xác suất của token kế tiếp rồi tiếp
+tục tự hồi quy cho tới token kết thúc. Thay vì chỉ giữ token tốt nhất như greedy decoding, E1 sử dụng beam search với $B=7$ \citep{freitag2017beam}. Ở mỗi bước,
+mỗi giả thuyết trong bảy giả thuyết hiện tại được mở rộng bằng các token đích
+có thể; sau đó chỉ bảy chuỗi có điểm cao nhất trên toàn bộ tập mở rộng được giữ
+lại. Điểm của một giả thuyết được chuẩn hóa theo độ dài:
+\begin{equation}
+\operatorname{score}(y)=\frac{1}{|y|^{\alpha}}
+\sum_{t=1}^{|y|}\log p(y_t\mid y_{<t},x),
+\qquad \alpha=1{,}0.
+\end{equation}
+Chuẩn hóa này hạn chế việc tổng log-xác suất ưu tiên quá mức các câu ngắn, dù
+beam search vẫn có thể chịu thiên lệch độ dài \citep{murray2018length}. Quá
+trình kết thúc theo quy tắc beam search và token EOS. Cấu hình đặt
+\texttt{max\_len\_a=1.2}, \texttt{max\_len\_b=10}; Fairseq tính
+$M=\min(\lfloor1{,}2S+10\rfloor,255)$, với $S$ là chiều rộng tensor nguồn
+sau padding của batch (có EOS), rồi dành thêm bước kết thúc EOS.
+Đây không phải giới hạn riêng theo số từ của từng câu. Cuối cùng, giả thuyết hoàn chỉnh có điểm cao nhất được
+chọn, bỏ các ký hiệu đặc biệt và chuyển về chuỗi Hán tự để chấm điểm.
+
+\subsection{E2: Qwen3-8B với QLoRA}
+E2 sử dụng Qwen3-8B, một mô hình ngôn ngữ lớn thuộc họ Qwen3
+\citep{qwen3technicalreport}. Đây là Transformer \emph{decoder-only}: khác với
+E1, mô hình không có encoder riêng cho câu nguồn mà thay vào đó, chỉ dẫn hệ thống, câu tiếng
+Việt và bản dịch Hán văn được nối thành một chuỗi token; causal mask bảo đảm
+mỗi vị trí chỉ attention đến các token đứng trước. Vì vậy, mô hình học xác suất
+bản dịch $y$ khi đã biết prompt $x$ theo phân rã tự hồi quy
+\begin{equation}
+p(y\mid x)=\prod_{t=1}^{T}p(y_t\mid x,y_{<t}).
+\end{equation}
+
+Qwen3-8B là mô hình dense gồm 36 khối decoder, kích thước biểu diễn 4.096 và
+tầng truyền thẳng 12.288 chiều. Mỗi khối gồm causal self-attention, mạng MLP có
+cổng dùng hàm kích hoạt SiLU, kết nối residual và RMSNorm. RoPE mã hóa vị trí
+bằng phép quay các vector query và key, giúp attention phân biệt thứ tự token
+mà không cần embedding vị trí học được. Attention sử dụng grouped-query
+attention với 32 đầu query nhưng chỉ tám đầu key/value; nhiều đầu query dùng
+chung một nhóm key/value, qua đó giảm bộ nhớ và phép tính cho key--value cache
+so với multi-head attention đầy đủ. Kiến trúc này vẫn sinh từng token từ trái
+sang phải, nhưng thừa hưởng các biểu diễn ngôn ngữ đã học trong tiền huấn luyện
+thay vì phải học toàn bộ ánh xạ Việt--Hán chỉ từ 19.218 cặp câu của đề tài.
+
+\paragraph{LoRA và QLoRA.}
+Tinh chỉnh đầy đủ một mô hình khoảng tám tỷ tham số không phù hợp với GPU 12~GB:
+chỉ riêng trọng số fp16 đã cần xấp xỉ 16~GB, chưa tính gradient, trạng thái bộ
+tối ưu và activation. LoRA \citep{hu2021lora} giải quyết phần chi phí cập nhật
+bằng cách đóng băng một ma trận trọng số $W\in\mathbb{R}^{d_{\mathrm{out}}
+\times d_{\mathrm{in}}}$ và chỉ học một hiệu chỉnh hạng thấp:
+\begin{equation}
+h=Wx+\Delta Wx,
+\qquad \Delta W=\frac{\alpha}{r}BA,
+\end{equation}
+trong đó $A\in\mathbb{R}^{r\times d_{\mathrm{in}}}$,
+$B\in\mathbb{R}^{d_{\mathrm{out}}\times r}$ và $r$ nhỏ hơn nhiều so với kích
+thước của $W$. E2 dùng cấu hình \texttt{all-linear} của PEFT để gắn LoRA
+vào các phép chiếu tuyến tính trong mô hình, không gồm đầu ra
+\texttt{lm\_head}, dùng $r=16$ và
+$\alpha=32$, nên hệ số tỷ lệ $\alpha/r=2$. Chỉ hai ma trận nhỏ $A,B$ nhận
+gradient; trọng số và tri thức của mô hình nền được giữ nguyên.
+
+QLoRA \citep{dettmers2023qlora} tiếp tục giảm bộ nhớ bằng cách lưu trọng số nền
+đã đóng băng ở dạng NF4 4-bit, một kiểu lượng tử hóa được thiết kế cho trọng số
+có phân phối gần chuẩn. Double quantization lượng tử hóa thêm các hằng số dùng
+để giải lượng tử, còn phép nhân ma trận vẫn được thực hiện ở fp16. Bộ tối ưu
+\texttt{paged\_adamw\_8bit} hạn chế các đỉnh sử dụng bộ nhớ trong quá trình
+huấn luyện. Nhờ kết hợp lượng tử hóa mô hình nền với cập nhật LoRA hạng thấp,
+E2 có thể thích nghi Qwen3-8B trên một RTX 3060 12GB VRAM mà không phải lưu gradient và
+trạng thái tối ưu cho toàn bộ tám tỷ tham số. Lựa chọn này đồng thời tận dụng
+tri thức tiền huấn luyện và giảm nguy cơ điều chỉnh quá mức toàn bộ mô hình trên
+một tập song ngữ nhỏ.
+
+\paragraph{Dữ liệu huấn luyện và hàm mất mát.}
+Mỗi cặp câu được dựng thành hội thoại gồm prompt chỉ dẫn chứa câu nguồn và lượt
+trả lời chứa câu Hán văn viết liền. Chế độ suy luận từng bước của Qwen3 được
+tắt để mô hình chỉ sinh bản dịch. Loss được mask ở toàn bộ token thuộc prompt,
+do đó cross-entropy chỉ được tính trên câu trả lời đích. Cách làm này hướng
+gradient vào nhiệm vụ dịch thay vì yêu cầu mô hình học lặp lại phần chỉ dẫn và
+câu nguồn đã cho sẵn. Bước packing ghép nhiều mẫu hoàn chỉnh thành các cửa sổ
+tối đa 768 token, chuyển 19.218 cặp câu thành 2.903 chuỗi huấn luyện và giảm
+lượng padding.
+
+Quá trình tối ưu dùng learning rate $2\times10^{-4}$, lịch cosine,
+warmup 5\% và batch hiệu dụng 16 chuỗi đã packing trên một GPU
+(batch mỗi thiết bị bằng 1, tích lũy gradient 16 bước).
+Manifest ghi nhận lượt chạy tiếp từ step 546 tới 910, tương ứng tổng 5 epoch.
+Trong các lần đánh giá được lưu, checkpoint step 400 có validation loss
+thấp nhất (1,43217) và được chọn làm mô hình cuối.
+
+Khi suy luận, mô hình dùng cùng mẫu prompt, có phần mở đầu lượt assistant,
+và beam search độ rộng 4, không lấy mẫu ngẫu nhiên. Số token mới bị giới hạn bởi
+$\min(512,\lceil 2L_{\mathrm{src}}\rceil+32)$, trong đó $L_{\mathrm{src}}$
+là số token của riêng câu tiếng Việt theo tokenizer Qwen, không gồm prompt
+hay token đặc biệt. Đây là ngân sách cấu hình, không phải giới hạn ngữ cảnh
+của mô hình; đầu ra có thể kết thúc sớm khi sinh EOS.
+Phần sinh được tách khỏi prompt, bỏ token đặc biệt và các tiền tố trả lời
+đã định nghĩa, rồi chuẩn hóa về dạng phân tách theo ký tự để chấm điểm.
+Quy trình không lọc bỏ mọi dấu câu hoặc chữ số.
+
+\subsection{E3-custom: Bổ sung gợi ý ở phía nguồn}
+
+E3-custom kiểm tra liệu bổ sung kiến thức lịch sử có giúp cải thiện chất lượng
+dịch hay không. Mô hình dùng cùng kiến trúc Transformer và hàm mất mát với E1,
+nhưng nhận thêm các Hán tự ứng viên ở phía nguồn. Đây là biến thể tự xây dựng,
+không phải E3 chính thức dùng \texttt{knowledge\_v2}.
+
+Pipeline lấy các biểu thức trong \texttt{pronunciation}, \texttt{nom\_query},
+\texttt{lookup\_query} và \texttt{query\_variants} từ các
+\texttt{canonical\_entries} trong \texttt{knowledge.json}, rồi liên kết
+chúng với Hán tự tương ứng. Biểu thức được chuẩn hóa khoảng trắng và casefold
+để so khớp; câu nguồn không bị viết lại theo dạng casefold.
+
+Với mỗi câu nguồn, hệ thống xét các cụm token liên tiếp có độ dài xuất hiện
+trong bảng tra cứu. Hán tự được ưu tiên theo số cụm khớp có chứa nó trong
+tập ứng viên, sau đó theo tần suất trong câu đích train, cuối cùng theo
+thứ tự Unicode. Câu đích validation và test không được dùng để truy hồi
+hoặc xếp hạng.
+
+Tối đa 64 gợi ý khác nhau được nối sau token \texttt{\_\_knowledge\_\_}.
+Với nguồn có $n<256$ token và tập ứng viên $C(x)$, số gợi ý là
+\begin{equation}
+k=\min\{64,|C(x)|,256-n-1\}.
+\end{equation}
+Nếu không khớp hoặc không còn chỗ cho gợi ý, nguồn được giữ nguyên và không
+thêm token phân cách; nguồn từ 256 token trở lên bị từ chối.
+Mỗi Hán tự gợi ý trở thành một token phía nguồn. Mô hình tự học cách sử dụng
+chúng qua attention, không có cơ chế buộc sao chép gợi ý vào bản dịch.
+
+Giới hạn 64 là lựa chọn cấu hình, chưa được kiểm chứng bằng ablation.
+Trong các artifact đã lưu, mọi câu đều nhận gợi ý, trung bình
+61,5--62,4 Hán tự mỗi câu. Số lượng gần sát giới hạn cho thấy đầu vào được
+bổ sung nhiều gợi ý, nhưng không đo được độ đúng hay recall của retriever.
+
+Độ dài nguồn trung bình tăng khoảng 3,9 lần; dictionary nguồn tăng từ
+3.616 lên 17.264 mục và số tham số tăng từ 67.652.608 lên 74.640.384.
+Với cùng giới hạn 1.000 token/GPU và tích lũy 4 bước, thống kê
+\texttt{train\_bsz} ở epoch cuối được lưu là 132,5 câu/update cho E1
+và 33,3 cho E3-custom, không phải trung bình chung của mọi update.
+Do đó, chênh lệch kết quả không thể quy hoàn toàn cho tri thức bổ sung:
+kích thước mô hình và thành phần batch cũng thay đổi.
+\section{Quy trình thực nghiệm}
+
+Các thí nghiệm sử dụng cùng các phân hoạch dữ liệu. E1 và E3-custom chọn
+checkpoint theo BLEU nội bộ của Fairseq trên validation; E2 chọn theo
+validation loss. Các tiêu chí này không đồng nhất với giao thức chấm điểm
+cuối cùng bên dưới.
+
+Bản ghi đóng băng lưu mã băm cấu hình, checkpoint, dự đoán và metric
+validation, cùng cấu hình giải mã. Khi sinh test, code kiểm tra lại cấu hình,
+checkpoint và cấu hình giải mã; chưa kiểm tra lại hai mã băm artifact
+validation. Việc có bản ghi không bảo đảm toàn bộ bằng chứng validation
+đã được xác minh.
+
+BLEU cuối cùng dùng giao thức \texttt{moses-char-v1}: chuẩn hóa NFC,
+bỏ khoảng trắng cũ, chèn khoảng trắng giữa từng Unicode code point, sau đó
+tokenize cả dự đoán và tham chiếu bằng Sacremoses 0.2.0
+(\texttt{MosesTokenizer}, ngôn ngữ \texttt{zh}, không escape và không tách
+gạch nối mạnh). SacreBLEU 2.6.0 nhận đầu vào này với
+\texttt{tokenize=none}, mixed case, exponential smoothing, tối đa 4-gram
+và \texttt{effective\_order=false}. Moses nằm ở bước chấm BLEU,
+không thay tokenizer huấn luyện Fairseq hoặc Qwen.
+chrF++ dùng đầu vào chuẩn hóa ký tự trước Moses, character order 6,
+word order 2, $\beta=2$, bỏ qua khoảng trắng khi đếm character n-gram.
+Dấu câu và chữ số, nếu có, vẫn được giữ lại.
+
+Chấm lại các dự đoán đã lưu bằng Moses cho cùng điểm BLEU, chrF++ và
+kết quả bootstrap như giao thức 13a cũ trên các artifact này.
+Đây không phải khẳng định hai tokenizer tương đương với mọi văn bản.
+Các bảng kết quả lấy từ \texttt{metrics/moses/}; metadata ghi phiên bản,
+cấu hình tiền xử lý và signature.
+
+Độ bất định được ước lượng bằng 1.000 lần bootstrap theo cặp, seed 42
+\citep{koehn2004statistical}. Trong mỗi lần lấy mẫu, hai hệ thống và tham
+chiếu dùng cùng chỉ số câu, rồi tính lại metric ở mức corpus.
+Khoảng tin cậy 95\% lấy theo thứ hạng percentile; $p$-value hai phía
+có hiệu chỉnh hữu hạn $+1$. Đây là độ bất định theo câu test,
+không phải độ biến thiên qua nhiều seed huấn luyện.
+
+Các lượt chạy dùng một GPU NVIDIA RTX 3060. Thời gian còn quan sát được
+xấp xỉ 53,5 phút cho E1, 79,3 phút cho E3-custom và 9,43 giờ cho E2.
+E1 và E2 có các đoạn resume; các tổng này được tái dựng từ log,
+không phải benchmark thời gian của một lượt chạy sạch.
+
+\subsection{Quy trình tái lập}
+
+Mã nguồn và hướng dẫn chạy được cung cấp tại
+\href{https://github.com/ngnquanq/nlp_project}{repository GitHub của dự án}.
+README tách ba môi trường \texttt{eval}, \texttt{fairseq} và \texttt{llm}.
+Ngữ liệu, checkpoint, dự đoán và annotation không được đưa công khai lên
+GitHub; người chạy cần nhận bundle tương ứng qua kênh riêng.
+
+Cần phân biệt ba mức tái lập: (1) chấm lại JSONL đã lưu, chỉ cần môi trường
+CPU \texttt{eval}; (2) sinh lại dự đoán, cần GPU, checkpoint và các artifact
+đầu vào phù hợp; (3) huấn luyện lại, cần toàn bộ dữ liệu và môi trường của
+từng mô hình. Nên dùng \texttt{RUN\_ROOT} mới và \texttt{make -j1} để tránh
+ghi đè artifact lịch sử. Notebook Kaggle là một đường chạy thay thế có
+khả năng phục hồi artifact; không dùng nó làm bằng chứng rằng đã huấn luyện
+lại các mô hình báo cáo, và không cam kết một thời gian chạy cố định.
+
+Bản ghi đóng băng E2 lịch sử không còn khớp cấu hình hiện tại.
+\texttt{repro-check} ghi nhận đây là lỗi đã biết; kết quả tổng hợp đạt
+kỳ vọng không có nghĩa chuỗi E2 đã nguyên vẹn. Manifest và Trainer state
+ghi lượt chạy tiếp 5 epoch tới step 910, trong khi cấu hình chuẩn hiện tại
+đặt 3 epoch. Dự đoán và điểm số đã lưu vẫn chấm lại được, nhưng chưa chứng
+minh tái lập toàn bộ quá trình sinh chúng từ cấu hình hiện tại.
+Không sửa bản ghi lịch sử để che lỗi này. Manifest E1/E3-custom thiếu
+Git revision; log E1 còn lại bắt đầu từ một lần resume. Các giới hạn này
+phải đi cùng kết quả khi chia sẻ artifact.
+
+
+
+\section{Kết quả}
+
+\subsection{Các chỉ số đánh giá}
+
+Bảng~\ref{tab:main-results} trình bày kết quả trên validation và test. E2 đạt
+điểm cao nhất trên cả hai chỉ số. So với E1, E2 tăng 12,14 BLEU trên test với
+khoảng tin cậy 95\% $[10{,}22;13{,}77]$ và tăng 10,29 chrF++ với khoảng
+$[9{,}03;11{,}79]$; cả hai phép so sánh có $p=0{,}002$. E2 cũng cao hơn
+E3-custom 11,15 BLEU và 9,46 chrF++ với $p=0{,}002$.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Điểm validation và test ở cấp ký tự.}
+\label{tab:main-results}
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{2}{c}{Validation} & \multicolumn{2}{c}{Test} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Hệ thống & BLEU & chrF++ & BLEU & chrF++ \\
+\midrule
+E1 & 29,37 & 31,12 & 28,63 & 30,58 \\
+E2 & \textbf{41,06} & \textbf{41,20} & \textbf{40,77} & \textbf{40,87} \\
+E3-custom & 31,04 & 32,72 & 29,62 & 31,41 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+E3-custom cao hơn E1 0,99 BLEU ($[-0{,}14;2{,}16]$, $p=0{,}092$) và 0,83
+chrF++ ($[-0{,}06;1{,}71]$, $p=0{,}064$). Cả hai khoảng tin cậy đều chứa 0.
+Do đó, mức cải thiện quan sát được của truy hồi chưa đủ thuyết phục, đặc biệt
+khi xét các yếu tố gây nhiễu đã nêu.
+
+\subsection{Độ chính xác n-gram và độ dài}
+
+Bảng~\ref{tab:ngram} phân rã điểm BLEU trên test. E2 cải thiện ở mọi bậc
+n-gram và chênh lệch tăng ở các chuỗi dài hơn. E1 có brevity penalty (BP) bằng
+0,943 và sinh 8.486 Hán tự so với 8.982 Hán tự tham chiếu. E2 gần như khớp độ
+dài tham chiếu (sinh 8.979 ký tự), với $BP\approx0{,}999666$, làm tròn thành 1,000. Vì vậy, mức tăng không chỉ đến từ
+độ phủ unigram mà còn từ khả năng bảo toàn các chuỗi ký tự cục bộ dài hơn.
+
+Đối với E3-custom, precision 1-gram (62,0\%) thấp hơn nhẹ so với E1
+(62,2\%), trong khi BP tăng từ 0,943 lên 0,968 và precision 2--4-gram
+tăng nhẹ. Các thành phần này cùng đóng góp vào mức tăng 0,99 BLEU;
+không thể từ chúng kết luận độ đúng nghĩa đã được cải thiện hoặc
+xác định riêng tác động của tri thức.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Precision BLEU theo bậc n-gram và brevity penalty trên test.}
+\label{tab:ngram}
+\begin{tabular}{lrrrrr}
+\toprule
+Hệ thống & 1-g & 2-g & 3-g & 4-g & BP \\
+\midrule
+E1 & 62,2 & 35,5 & 23,1 & 16,6 & 0,943 \\
+E2 & \textbf{69,9} & \textbf{46,6} & \textbf{33,6} & \textbf{25,3} & \textbf{1,000} \\
+E3-custom & 62,0 & 35,8 & 23,4 & 16,9 & 0,968 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Phân tích lỗi: quy trình và trạng thái}
+
+Mã nguồn chuẩn bị một mẫu chung gồm 100 ID test, chọn với seed 42,
+rồi ghép đầu ra của E1, E2 và E3-custom thành 300 dòng annotation.
+Bảy nhãn gồm \texttt{CORRECT}, \texttt{MISTRANSLATION},
+\texttt{OMISSION}, \texttt{UNSUPPORTED\_ADDITION},
+\texttt{ENTITY\_ERROR}, \texttt{NUMBER\_OR\_TIME\_ERROR} và
+\texttt{OTHER}. Một câu có thể mang nhiều nhãn lỗi, nhưng
+\texttt{CORRECT} không được đi cùng nhãn lỗi.
+
+Tệp mẫu có chỗ cho hai người gán nhãn và nhãn thống nhất cuối cùng.
+Lệnh tổng hợp chỉ nhận các dòng có trạng thái \texttt{ADJUDICATED}
+và kiểm tra mỗi hệ thống có cùng 100 ID. Tuy nhiên, validator hiện còn
+chấp nhận nhãn rỗng hoặc lặp và dòng trùng ID; cần kiểm tra các trường hợp
+này trước khi dùng bảng tổng hợp làm kết quả nghiên cứu.
+
+Tại thời điểm đối chiếu, cả 300 dòng trong
+\texttt{error\_analysis/manual\_sample.jsonl} vẫn là \texttt{PENDING},
+chưa có nhãn thống nhất hoặc bảng tổng hợp. Không tìm thấy triển khai
+gán nhãn tự động theo ngưỡng xóa/chèn ký tự tương ứng với bản thảo cũ.
+Vì vậy, báo cáo không công bố tỷ lệ lỗi hay kết luận so sánh thực thể,
+thời gian và văn phong dựa trên nhãn chưa được kiểm chứng.
+Đánh giá thủ công này là phần việc còn lại.
+
+\section{Thảo luận}
+
+Kết quả nổi bật nhất là hiệu quả của việc thích nghi Qwen3-8B bằng QLoRA
+trong bối cảnh tài nguyên thấp. E2 đạt 40,77 BLEU và 40,87 chrF++ trên tập
+test, cao hơn E1 lần lượt 12,14 và 10,29 điểm; cả hai chênh lệch đều có ý
+nghĩa thống kê với $p=0{,}002$. Mức cải thiện xuất hiện nhất quán từ unigram
+đến 4-gram, đồng thời độ dài đầu ra của E2 gần như khớp với tham chiếu
+($BP\approx1{,}000$ sau làm tròn). Điều này cho thấy lợi thế của E2 không chỉ đến từ việc sinh
+nhiều ký tự hơn, mà còn từ khả năng tái tạo chính xác hơn các chuỗi Hán tự
+cục bộ dài hơn.
+
+Kết quả trên phù hợp với giả thuyết rằng tri thức tiền huấn luyện của mô hình
+ngôn ngữ lớn giúp sử dụng hiệu quả hơn một ngữ liệu song song chỉ gồm 19.218
+cặp câu. Trong khi E1 phải ước lượng toàn bộ 67,65 triệu tham số từ đầu, E2
+giữ nguyên phần lớn trọng số Qwen3-8B và chỉ học các adapter hạng thấp. Nhờ
+đó, mô hình có thể bảo toàn những biểu diễn ngôn ngữ và ánh xạ từ vựng đã
+học trước, đồng thời thích nghi chúng với miền sử liệu Việt--Hán. Tuy nhiên,
+do E1 và E2 khác nhau về quy mô, tiền huấn luyện, token hóa và quy trình tối
+ưu, kết quả cho thấy lợi thế của hệ thống Qwen3--QLoRA trên bộ dự đoán đã lưu, chứ chưa
+tách riêng đóng góp của từng thành phần.
+
+E3-custom tạo mức tăng 0,99 BLEU và 0,83 chrF++ so với E1, nhưng các khoảng
+tin cậy vẫn chứa 0. Vì vậy, kết quả chưa đủ để kết luận cơ chế truy hồi đơn
+giản mang lại cải thiện ổn định. Dù vậy, thí nghiệm cung cấp một phát hiện
+hữu ích: chỉ tăng độ phủ ứng viên là chưa đủ. Gần như mọi câu đều nhận số
+gợi ý sát mức 64, làm nguồn dài hơn khoảng 3,9 lần và khiến retriever có
+đầu vào chứa nhiều gợi ý. Số lượng ứng viên không phải phép đo recall
+hay độ liên quan theo ngữ cảnh. Một hướng tiếp theo có triển vọng
+là xếp hạng ứng viên theo ngữ cảnh, ưu tiên thực thể và thuật ngữ được câu
+nguồn hỗ trợ, đồng thời kiểm soát ngân sách token và batch để đo riêng tác
+động của retrieval.
+
+Nhìn chung, các chỉ số tự động cung cấp bằng chứng định lượng mạnh rằng E2
+vượt trội trên benchmark hiện tại. Dù vậy, BLEU và chrF++ vẫn đo mức tương
+đồng với một tham chiếu duy nhất, nên chưa phản ánh đầy đủ tính đúng nghĩa,
+văn phong cổ hoặc độ chính xác lịch sử của những cách diễn đạt khác tham
+chiếu. Vì thế, đánh giá chuyên gia không phủ nhận kết quả tự động mà đóng
+vai trò bổ sung: nó giúp xác định liệu mức tăng n-gram có đi kèm với độ trung
+thành nội dung, cách dùng Hán văn cổ và khả năng bảo toàn thực thể, niên đại
+hay không.
+
+
+\section{Hạn chế}
+
+Thứ nhất, dữ liệu chỉ đến từ một bộ sử, nên kết quả có thể không tổng quát sang
+thơ, văn bia, chiếu biểu hoặc các giai đoạn lịch sử khác. Thứ hai, tập train
+silver có thể chứa nhiễu căn chỉnh và 8,3\% cặp lặp. Thứ ba, validation và test
+chỉ có một câu tham chiếu cho mỗi câu nguồn. Thứ tư, phân tích lỗi thủ công
+chưa hoàn tất, nên chưa thể định lượng độ đúng nghĩa, thực thể và thời gian.
+Thứ năm, E2 có sai lệch trong chuỗi xác minh cấu hình lịch sử;
+chấm lại được metric không đồng nghĩa tái lập đầy đủ huấn luyện và suy luận.
+
+Phép so sánh cũng không phải một ablation kiến trúc được kiểm soát. E1 và E2
+khác nhau về số tham số, tiền huấn luyện, cách tách token, tối ưu, giải mã và
+tiêu chí chọn checkpoint. E3-custom thay đổi cả biểu diễn nguồn lẫn thành phần
+batch hiệu dụng. Vì vậy, kết quả được quy cho toàn bộ hệ thống, không phải
+cho một thành phần đơn lẻ.
+
+
+\section{Kết luận}
+
+Trên các dự đoán đã lưu của benchmark Việt--Hán cổ, Qwen3-8B thích nghi
+bằng QLoRA 4-bit đạt BLEU và chrF++ cao hơn đáng kể so với Transformer
+Fairseq huấn luyện từ đầu. Mức tăng có ý nghĩa thống kê và xuất hiện ở cả precision n-gram lẫn độ
+bao phủ đầu ra. Phương pháp truy hồi đơn giản ở phía nguồn chỉ tạo mức cải
+thiện nhỏ, chưa có ý nghĩa thống kê và có thể đưa gợi ý gây nhiễu vào mô hình.
+Các hướng tiếp theo gồm làm sạch ngữ liệu song song, truy hồi theo ngữ cảnh,
+thực hiện ablation với ngân sách tương đương và đánh giá độ trung thành lịch sử
+bằng chuyên gia.
+
+{\small\raggedright
+\bibliographystyle{plainnat}
+\bibliography{reference}
+}
+
+\end{document}

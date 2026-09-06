@@ -3,6 +3,9 @@
 > Historical audit. The Git hygiene, QLoRA logging, E4 preflight dependency,
 > annotation extension, and model-revision findings below were remediated on
 > 2026-08-20. Artifact-integrity caveats remain historical facts.
+> September 2026 correction: the earlier assertion that 13a satisfied the Moses
+> requirement was unsupported. New evaluation uses explicit Moses preprocessing;
+> see [the migration](MOSES_EVALUATION.md). Original evidence remains unchanged.
 
 Two questions: are E1, E2, and the custom E3 reproducible through the Makefile, and what
 still separates this workspace from what `PROJECT_SPECIFICATION_v1.3.docx` asks for.
@@ -200,7 +203,7 @@ Rubric, §17: E1 20%, E2 25%, evaluation 15%, error analysis 15%, report and pre
 | §7/§8 | E2 LLM adaptation, required | Done. Qwen3-8B NF4 QLoRA, test BLEU 40.77, chrF++ 40.87. Needs the provenance caveat disclosed |
 | §17 | Bonus: Fairseq + official `knowledge_v2`, +10% | **Not earned.** `configs/e3_fairseq_knowledge.yaml` is `status: blocked`; `cli.py:27-29` refuses to run the backend. The completed `e3_custom_fairseq_knowledge_vi_zh_v1` is a separate method this repo's own docs say must not be presented as the official one |
 | §10 | Report experiment_id, model, dataset, training config, checkpoint, decoding config | E1 and E3 fully. E2 recoverable from `run_manifest.json` plus the prediction rows, but not from `selection_frozen.json` |
-| §11 | SacreBLEU with a unified Moses tokenizer across all four groups | **Nuanced, not a violation.** SacreBLEU 2.6.0 exposes no `moses` tokenizer; `13a` is the closest, its own docstring reading "equivalent to mteval-v13a." The substantive issue is upstream: `normalize.py:20-23` inserts a space between every codepoint, so ZH-target BLEU is character-level by construction, close to `tok:zh`, and not on the same numeric scale as word-level BLEU over EN or VI targets — which is what §18's cross-direction matrix assumes. One methodology paragraph, not a metric change |
+| §11 | SacreBLEU with a unified Moses tokenizer across all four groups | **Historical gap, now addressed in the evaluator.** New scoring applies Sacremoses before SacreBLEU with `tokenize=none`; 13a is not Moses tokenizer.perl. Chinese character segmentation is retained and must be aligned across groups. See `MOSES_EVALUATION.md`; original metrics remain historical evidence. |
 | §11 | chrF++ | Done. `chrF2++`, `nc:6 nw:2`, every metrics file |
 | §11 | Every metric records version and signature | Done, e.g. `nrefs:1\|case:mixed\|eff:no\|tok:13a\|smooth:exp\|version:2.6.0` |
 | §11 | COMET / xCOMET-lite | Optional ("có thể sử dụng"). Absence is not a gap |
@@ -260,8 +263,8 @@ and `slides.pdf`. Three disclosures belong in Limitations:
 - E1 versus E3-custom is not budget-matched, with the numbers above; the +0.99 BLEU is not
   significant at p = 0.092.
 
-Add a §11 methodology paragraph: SacreBLEU 2.6.0 has no Moses tokenizer, and `tok:13a`
-over character-spaced Chinese is character-level BLEU, so ZH-target scores are not on the
+Add a §11 methodology paragraph describing external Moses preprocessing and the
+retained character-spaced Chinese, so ZH-target scores are not on the
 same scale as word-level EN and VI scores in the §18 matrix. Record E2's resolved
 revision `b968826d9c46…` and the exact `packages` versions from `run_manifest.json`.
 

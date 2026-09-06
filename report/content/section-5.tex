@@ -1,0 +1,105 @@
+\section{Kết quả} - Phát
+
+% 1. Tổng quan kết quả
+
+% 2. E1 Results
+
+% 3. E2 Results
+
+% 4. E1 vs E2 Comparison
+
+% 5. Qualitative Examples
+
+\subsection{Tổng quan}
+
+Phần này trình bày kết quả thực nghiệm của hai mô hình dịch máy chính trong dự án: mô hình cơ sở NMT Transformer (\textbf{E1}) huấn luyện từ đầu (from scratch) và mô hình ngôn ngữ lớn Qwen3-8B tinh chỉnh hiệu quả tham số bằng QLoRA (\textbf{E2}). Quá trình đánh giá được thực hiện trên tập kiểm định (Validation) và tập kiểm thử (Test) gồm 510 cặp câu tiếng Việt - Hán cổ. Điểm số BLEU và chrF++ được đo đạc ở cấp độ ký tự thông qua thư viện SacreBLEU 2.6.0.
+
+Bảng~\ref{tab:quantitative_results} tổng hợp kết quả định lượng của các thí nghiệm trên cả hai tập dữ liệu.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Kết quả định lượng chỉ số BLEU và chrF++ trên tập Validation và Test}
+\label{tab:quantitative_results}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Thí nghiệm} & \textbf{Val BLEU} & \textbf{Val chrF++} & \textbf{Test BLEU} & \textbf{Test chrF++} \\
+\midrule
+\textbf{E1} (Fairseq Transformer) & 29.37 & 31.12 & 28.63 & 30.58 \\
+\textbf{E2} (Qwen3-8B QLoRA) & \textbf{41.06} & \textbf{41.20} & \textbf{40.77} & \textbf{40.87} \\
+\textit{E3-Custom} (Fairseq + Retrieval)* & 31.04 & 32.72 & 29.62 & 31.41 \\ \bottomrule
+\end{tabular}
+\newline
+\small{\textit{*Lưu ý: E3-Custom là thí nghiệm bổ sung sử dụng phương pháp tra cứu tri thức nguồn và không phải phương pháp chính thức.}}
+\end{table}
+
+\subsection{Kết quả thực nghiệm E1 (Fairseq Transformer)} 
+
+Mô hình \textbf{E1} sử dụng kiến trúc Transformer cơ bản (6 lớp Encoder, 6 lớp Decoder, kích thước ẩn $d_{model} = 512$, tầng FFN $= 2048$, 8 đầu attention) được huấn luyện từ đầu trên tập Train gồm 19,218 cặp câu.
+\begin{itemize}
+    \item \textbf{Quá trình huấn luyện:} Mô hình hội tụ và dừng sớm (early stopping) do vượt quá số epoch quy định của thuộc tính patience ($patience = 20$) tại epoch 171 (tương ứng với 24,791 bước cập nhật gradient). Checkpoint tối ưu nhất được lựa chọn ở epoch 151 dựa trên chỉ số BLEU lớn nhất trên tập Validation là 29.39 (đo trực tiếp khi train).
+    \item \textbf{Hiệu năng tập Test:} Trên tập Test độc lập, mô hình E1 đạt điểm số BLEU là 28.63 và chrF++ là 30.58.
+    \item \textbf{Đặc trưng thế hiện:} Mô hình E1 gặp hiện tượng sinh thiếu ký tự (under-generation). Chỉ số phạt độ dài câu ngắn (Brevity Penalty - BP) của E1 trên tập Test là 0.943 với tỷ lệ độ dài chuỗi dự đoán trên chuỗi tham chiếu thực tế là 8,486 / 8,982 ký tự. Điều này cho thấy mô hình NMT truyền thống khi huấn luyện trên tập dữ liệu nhỏ có xu hướng dịch ngắn hơn so với câu đích chuẩn để giảm thiểu rủi ro lỗi phạt n-gram.
+\end{itemize}
+
+\subsection{Kết quả thực nghiệm E2 (Qwen38B QLoRa)}
+
+Mô hình \textbf{E2} thực hiện tinh chỉnh QLoRA trên mô hình nền tảng Qwen3-8B ở định dạng lượng tử hóa 4-bit NF4, sử dụng cấu hình tích hợp toàn bộ các tầng tuyến tính (\texttt{all-linear targets}) với rank $r = 16$ và hệ số scale $\alpha = 32$.
+\begin{itemize}
+    \item \textbf{Quá trình huấn luyện:} Huấn luyện trong 3 epoch (tương đương 546 bước cập nhật với kích thước batch hiệu dụng là 16). Do tần suất đánh giá được cấu hình mỗi 200 bước, checkpoint tốt nhất được khôi phục tại bước 400 (epoch 2.2) với giá trị mất mát trên tập kiểm định thấp nhất (\texttt{eval\_loss} $= 1.4322$), thay vì sử dụng checkpoint cuối cùng của epoch 3.
+    \item \textbf{Hiệu năng tập Test:} Mô hình E2 cải thiện vượt bậc, đạt điểm số BLEU là 40.77 và chrF++ là 40.87 trên tập Test.
+    \item \textbf{Đặc trưng thể hiện:} Mô hình E2 đạt điểm phạt câu ngắn tuyệt đối ($BP = 1.000$) với tỷ lệ độ dài chuỗi dự đoán gần như khớp hoàn toàn với câu đích tham chiếu (8,979 / 8,982 ký tự). Việc áp dụng kỹ thuật nhãn mặt nạ chỉ tính loss trên câu trả lời (response-only loss) kết hợp cấu trúc prompt rõ ràng giúp LLM kiểm soát tốt hành vi sinh chuỗi dịch, tránh hiện tượng sinh lặp hoặc sinh thừa văn bản tiếng Việt.
+\end{itemize}
+
+\subsection{So sánh đối chiếu E1 vs E2 (E1 vs E2 Comparison)}
+
+Bảng~\ref{tab:ngram_precision} phân tích độ chính xác n-gram ở cấp độ ký tự và hệ số phạt độ dài (BP) của hai mô hình trên tập Test để làm rõ nguồn gốc của sự cải tiến hiệu năng.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{So sánh chi tiết n-gram precision và Brevity Penalty (BP) trên tập Test}
+\label{tab:ngram_precision}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Mô hình} & \textbf{1-gram} & \textbf{2-gram} & \textbf{3-gram} & \textbf{4-gram} & \textbf{BP} & \textbf{Độ dài Dự đoán / Tham chiếu} \\
+\midrule
+\textbf{E1} & 62.2 & 35.5 & 23.1 & 16.6 & 0.943 & 8,486 / 8,982 \\
+\textbf{E2} & \textbf{69.9} & \textbf{46.6} & \textbf{33.6} & \textbf{25.3} & \textbf{1.000} & 8,979 / 8,982 \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+    \item \textbf{Phân tích độ chính xác n-gram:} Điểm số cải tiến của E2 so với E1 tăng dần theo bậc của n-gram: chênh lệch tăng từ +7.7\% ở 1-gram lên đến +8.7\% ở 4-gram. Điều này chứng minh rằng mô hình LLM Qwen3 không chỉ cải thiện khả năng dịch đúng các ký tự Hán tự đơn lẻ mà còn vượt trội ở khả năng xây dựng các cụm từ ghép, cú pháp và cấu trúc ngữ pháp mạch lạc trong Hán văn cổ (phản ánh qua tỷ lệ khớp 4-gram cao vượt trội).
+    \item \textbf{Kiểm định thống kê Paired Bootstrap:}
+    Phép kiểm định tái lấy mẫu tự khởi động theo cặp ($N = 1,000$, $seed = 42$) trên tập Test cho thấy mức chênh lệch hiệu năng giữa E2 và E1 đạt ý nghĩa thống kê cực kỳ rõ rệt:
+    \begin{itemize}
+        \item Độ chênh lệch BLEU trung bình ($\Delta$BLEU) đạt \textbf{+12.14} với khoảng tin cậy 95\% dao động trong khoảng \textbf{[10.22, 13.77]} và giá trị $p = 0.002$.
+        \item Độ chênh lệch chrF++ trung bình ($\Delta$chrF++) đạt \textbf{+10.29} với khoảng tin cậy 95\% trong khoảng \textbf{[9.03, 11.79]} và giá trị $p = 0.002$.
+    \end{itemize}
+    Vì khoảng tin cậy 95\% của cả hai độ đo đều nằm hoàn toàn phía trên điểm số 0 và giá trị $p$ cực kỳ nhỏ ($p \ll 0.05$), giả thuyết không (null hypothesis) bị bác bỏ. Mô hình tinh chỉnh LLM (E2) cho thấy sự vượt trội thực sự về mặt thống kê so với mô hình Transformer truyền thống huấn luyện từ đầu (E1).
+\end{itemize}
+
+\subsection{Phân tích ví dụ định tính (Qualitative Examples)}
+
+Mặc dù quy trình dán nhãn lỗi thủ công 300 mẫu (error analysis sheet) của dự án vẫn đang trong quá trình thực hiện độc lập bởi các thành viên nhóm, các phân tích sơ bộ dựa trên đặc tính cấu trúc cho phép nhận diện một số xu hướng lỗi đặc trưng của hai mô hình:
+
+\begin{enumerate}
+    \item \textbf{Lỗi bỏ sót thông tin (Omission):}
+    \begin{itemize}
+        \item \textit{Đặc trưng E1:} Do xu hướng dịch ngắn (BP $= 0.943$), E1 thường bỏ sót các thành phần trạng ngữ chỉ thời gian hoặc các hư từ (particles) trong Hán văn cổ. Ví dụ, các từ nguồn chỉ thời gian như ``năm sau'', ``mùa đông'' đôi khi bị mô hình bỏ qua để tập trung dịch các động từ và danh từ chính.
+        \item \textit{Đặc trưng E2:} Lỗi bỏ sót xuất hiện rất ít nhờ khả năng bao phủ ngữ nghĩa tốt của mô hình ngôn ngữ lớn đã được huấn luyện trên ngữ cảnh dài.
+    \end{itemize}
+
+    \item \textbf{Lỗi thực thể (Entity Error):}
+    \begin{itemize}
+        \item \textit{Đặc trưng E1:} Gặp khó khăn lớn đối với các tên người, tên chức vị cổ hoặc địa danh hiếm (ví dụ: các chức quan như ``Đô tổng binh'', hoặc địa danh cổ). E1 dễ dịch sai lệch ký tự do các từ này xuất hiện với tần suất cực thấp trong tập Train và không có tri thức ngoại vi bổ trợ.
+        \item \textit{Đặc trưng E2:} Thể hiện thế mạnh vượt trội đối với thực thể nhờ tri thức nền (world knowledge) khổng lồ tích lũy từ quá trình tiền huấn luyện (pre-training) của Qwen3 trên các văn bản cổ và tài liệu Hán ngữ cổ phong phú, giúp mô hình ánh xạ chính xác tên thực thể từ phiên âm Việt sang đúng ký tự Hán cổ tương ứng.
+    \end{itemize}
+
+    \item \textbf{Lỗi dịch sai (Mistranslation) và sinh từ ngoài ngữ cảnh (Unsupported Addition):}
+    \begin{itemize}
+        \item \textit{Đặc trưng E1:} Lỗi dịch sai thường xuất hiện dưới dạng các ký tự không xác định (\texttt{<unk>}) do gặp phải các từ vựng ngoài từ điển (OOV) hoặc các ký tự Hán tự hiếm không vượt qua được ngưỡng lọc từ vựng khi huấn luyện.
+        \item \textit{Đặc trưng E2:} Không gặp lỗi \texttt{<unk>}, tuy nhiên mô hình sinh chữ đôi khi có xu hướng ``ảo tưởng'' (hallucination) hoặc tự ý thêm các từ mang tính giải thích ngữ nghĩa khi gặp những câu nguồn tiếng Việt quá ngắn hoặc có cấu trúc mơ hồ. Lỗi này thường được khắc phục hiệu quả bằng cách điều chỉnh nhiệt độ giải mã (\texttt{temperature}) về mức cực thấp (giải mã tham lam/greedy-free beam search).
+    \end{itemize}
+\end{enumerate}

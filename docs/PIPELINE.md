@@ -1,5 +1,9 @@
 # Pipeline: preprocessing, experiment runs, validation
 
+September 2026 update: new evaluation uses [Moses](MOSES_EVALUATION.md).
+Historical run tables and training-time selection scores below describe the
+original 13a protocol; migrated artifacts live in `metrics/moses/`.
+
 What the code actually does, end to end, with the numbers the completed runs produced.
 Written to be lifted into the report's *Data*, *Experimental setup*, and *Evaluation*
 sections.
@@ -493,7 +497,8 @@ The in-training BLEU is a *selection* signal and should not be quoted as a resul
 is not a differently-defined metric. `--eval-bleu-detok space` **disables** detokenization
 (`fairseq/tasks/translation.py:241-245`) and `eval_tokenized_bleu` defaults to `False`, so
 Fairseq calls `sacrebleu.corpus_bleu(hyps, [refs])` at its default `13a`
-(`translation.py:494-497`) — character-spaced text through `tok:13a`, exactly like §3.4.
+(`translation.py:494-497`) — character-spaced text through `tok:13a`. This remains the
+training-time checkpoint-selection metric; final evaluation in §3.4 now uses Moses.
 The residual 0.02 gap (E1 29.39 vs 29.37; E3 31.05 vs 31.04) is therefore a **decoding-path
 difference, not a metric-definition difference**: standalone generation disables the
 encoder fast path (`fairseq_generate.py:7-15`) and batches at `--batch-size 64`, while
@@ -562,26 +567,28 @@ Keeping `prediction_raw` next to `prediction` is what makes the post-processing 
 stored `prediction_scored` differs** (`evaluation.py:34-37`), then scores
 `prediction_scored` against `score_form_chinese(reference)` with SacreBLEU 2.6.0:
 
-- `BLEU(lowercase=False, tokenize="13a", smooth_method="exp", effective_order=False)`
+- Moses preprocessing: Sacremoses 0.2.0, `lang="zh"`, `escape=False`,
+  `aggressive_dash_splits=False`, on the existing character-spaced inputs.
+- `BLEU(lowercase=False, tokenize="none", smooth_method="exp", effective_order=False)`
 - `CHRF(char_order=6, word_order=2, beta=2, lowercase=False, whitespace=False)` → chrF2++
 
 Output includes the score, the **signature**, and SacreBLEU's verbose string:
 
 ```
-nrefs:1|case:mixed|eff:no|tok:13a|smooth:exp|version:2.6.0
+nrefs:1|case:mixed|eff:no|tok:none|smooth:exp|version:2.6.0
 nrefs:1|case:mixed|eff:yes|nc:6|nw:2|space:no|version:2.6.0
 ```
 
 > **Methodological caveat that must appear in the report.** Both metrics are
 > **character-level here, not word-level.** Inputs are pre-spaced one codepoint per token,
-> so `tok:13a` has nothing left to segment, and chrF++'s word bigrams (`nw:2`) are in fact
+> Moses receives pre-segmented Chinese, and chrF++'s word bigrams (`nw:2`) are in fact
 > *character* bigrams. `ref_len = 8,982` on test equals the corpus test target token count
 > exactly, confirming it. Character-level BLEU on Chinese runs systematically higher than
 > word-level BLEU on Latin-script targets, so these numbers are **not on the same scale** as
 > word-level EN/VI scores from other groups. Note also that the spec asks for a unified
-> Moses tokenizer, which SacreBLEU 2.6.0 does not expose — `13a` (its `mteval-v13a`
-> equivalent) is the closest available, and over character-spaced input the choice is
-> effectively inert.
+> Moses tokenizer. New evaluation applies Moses externally before SacreBLEU;
+> `13a` is a distinct historical protocol. Report the external preprocessing metadata
+> with the signature, and align Chinese segmentation with the other groups.
 
 **Results** (510 examples per split; every file recomputes exactly from its predictions,
 §3.6):

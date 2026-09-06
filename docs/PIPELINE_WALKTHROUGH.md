@@ -1,5 +1,9 @@
 # Presenter walkthrough — the Group 10 MT pipeline end to end
 
+September 2026: this walkthrough's recorded scores describe historical 13a runs.
+New evaluation and notebook result exports use [Moses](MOSES_EVALUATION.md), with
+rescored artifacts under `metrics/moses/`; model-selection history is preserved.
+
 A briefing for whoever is presenting this pipeline (~15–20 min slot). It answers, in
 order: what is the architecture, what goes in and out of each stage, what were the
 low-level decisions, why were they made that way, and what did each one cost.
@@ -588,8 +592,9 @@ Each item: the question → what to say → the evidence behind it. All of these
 > **not on the same scale** as word-level EN/VI scores from other groups."
 
 Evidence: `ref_len = 8,982` on test equals the corpus test target token count exactly. Also
-note the spec asks for a unified Moses tokenizer, which SacreBLEU 2.6.0 does not expose;
-`13a` is its closest equivalent, and over character-spaced input the choice is inert.
+note the spec asks for a unified Moses tokenizer. New evaluation explicitly applies
+Moses before SacreBLEU with `tokenize=none`; 13a is a different historical protocol.
+The retained Chinese character segmentation must also be aligned across groups.
 
 ### "So retrieval works? +0.99 BLEU."
 

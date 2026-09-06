@@ -1,0 +1,78 @@
+\section{Mô tả dữ liệu}
+
+\subsection{Tổng quan}
+
+Ngữ liệu cốt lõi của đề tài là tập song ngữ tiếng Việt--Hán văn cổ được xây dựng từ \textit{Đại Việt sử ký toàn thư}. Trong mỗi cặp dữ liệu, phía nguồn là câu tiếng Việt và phía đích là câu Hán văn cổ tương ứng. Đây là nguồn dữ liệu bắt buộc cho các thí nghiệm chính của hướng dịch Việt $\rightarrow$ Hán cổ; ba phân hoạch train, validation và test đã được cố định trước khi thực nghiệm nhằm bảo đảm khả năng so sánh giữa các mô hình và hạn chế việc điều chỉnh mô hình theo tập test \cite{projectspec2026}.
+
+Gói dữ liệu gồm hai thành phần. Thành phần thứ nhất là ngữ liệu song song với tổng cộng 20.238 cặp câu, trong đó có 19.218 cặp train, 510 cặp validation và 510 cặp test. Thành phần thứ hai là tệp \texttt{knowledge.json}, một kho tri thức có cấu trúc cho khoảng 16.000 Hán/Nôm tự, chứa các trường thông tin như mã Unicode, âm đọc, biến thể truy vấn, cấu tạo chữ, nghĩa và ví dụ. Ngữ liệu song song được sử dụng trong các thí nghiệm cốt lõi E1 và E2, còn kho tri thức chỉ đóng vai trò dữ liệu bổ trợ cho thí nghiệm mở rộng.
+
+Theo quy ước về nguồn gốc dữ liệu, tập train được tạo bằng phương pháp tự động căn chỉnh nên được xem là dữ liệu \textit{silver}. Ngược lại, validation và test được căn chỉnh thủ công và đóng vai trò dữ liệu \textit{gold} để lựa chọn mô hình và đánh giá cuối cùng. Sự phân biệt này đặc biệt quan trọng vì số lượng lớn hơn của tập train không đồng nghĩa với độ chính xác căn chỉnh cao hơn các tập đánh giá.
+
+\begin{table}[htbp]
+    \centering
+    \small
+    \caption{Tổng quan các phân hoạch của ngữ liệu song song}
+    \label{tab:dataset-overview}
+    \begin{tabular}{lrrrr}
+        \toprule
+        \textbf{Phân hoạch} & \textbf{Số cặp} & \textbf{Cặp duy nhất} & \textbf{TB từ Việt} & \textbf{TB Hán tự} \\
+        \midrule
+        Train      & 19.218 & 17.622 & 20,92 & 18,62 \\
+        Validation &    510 &    510 & 20,32 & 17,47 \\
+        Test       &    510 &    510 & 20,66 & 17,61 \\
+        \midrule
+        Tổng       & 20.238 & --     & --    & --    \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Đặc điểm dữ liệu}
+
+\subsubsection{Quy mô và phân bố độ dài}
+
+Bảng~\ref{tab:dataset-overview} cho thấy độ dài trung bình của ba phân hoạch tương đối đồng nhất: mỗi câu tiếng Việt có khoảng 20--21 từ, trong khi câu đích có khoảng 17--19 Hán tự. Trung vị độ dài của phía tiếng Việt là 17 từ ở cả ba tập; trung vị phía Hán là 15 Hán tự đối với train và 14,5 Hán tự đối với validation và test. Nhìn chung, câu tiếng Việt dài hơn câu Hán, phù hợp với tính hàm súc và khả năng lược bỏ thành phần của Hán văn cổ.
+
+Mặc dù giá trị trung bình giữa các tập khá ổn định, miền độ dài của tập train rất rộng: từ 1 đến 199 từ tiếng Việt và từ 1 đến 196 Hán tự. Trong khi đó, validation giới hạn ở 3--70 từ tiếng Việt và 2--66 Hán tự; test giới hạn ở 2--90 từ tiếng Việt và 2--79 Hán tự. Các trường hợp quá ngắn hoặc quá dài trong tập train có thể tạo batch mất cân bằng và làm tăng nhiễu trong quá trình học.
+
+\subsubsection{Đơn vị biểu diễn và từ vựng}
+
+Phía tiếng Việt được biểu diễn dưới dạng chuỗi từ phân cách bằng khoảng trắng và đã được chuyển về chữ thường. Phía Hán văn được tách ở cấp độ ký tự: mỗi token quan sát được đều là một Hán tự đơn và các ký tự được phân cách bằng khoảng trắng. Do đó, khái niệm ``độ dài câu đích'' và ``kích thước từ vựng đích'' trong báo cáo lần lượt chỉ số Hán tự và số loại Hán tự, không phải số từ theo cách phân đoạn từ vựng tiếng Trung hiện đại.
+
+Tập train có 401.997 token tiếng Việt thuộc 3.607 loại từ và 357.806 token Hán thuộc 5.386 loại ký tự. Trong số đó, 507 loại từ tiếng Việt và 1.137 Hán tự chỉ xuất hiện đúng một lần. Phân bố đuôi dài này cho thấy phía đích có độ phân tán từ vựng cao hơn: nhiều Hán tự hiếm, tên riêng, chức danh, địa danh và niên hiệu chỉ cung cấp rất ít tín hiệu học. Đây là một nguyên nhân khiến mô hình huấn luyện từ đầu dễ nhầm lẫn hoặc không sinh đúng các ký tự ít gặp.
+
+\subsubsection{Tính toàn vẹn và mức độ trùng lặp}
+
+Số dòng ở hai phía của từng phân hoạch hoàn toàn bằng nhau và không có dòng rỗng. Kiểm tra khớp chính xác cũng không phát hiện câu tiếng Việt, câu Hán hay cặp song ngữ nào xuất hiện đồng thời giữa train, validation và test. Kết quả này cho thấy không có rò rỉ trực tiếp do sao chép nguyên dòng giữa các phân hoạch.
+
+Tuy nhiên, trong 19.218 dòng train chỉ có 17.622 cặp song ngữ duy nhất; 1.596 dòng còn lại là các lần lặp, tương đương khoảng 8,3\% tập huấn luyện. Một số biểu thức sử ký ngắn và có tính công thức xuất hiện nhiều lần. Sự lặp lại có thể phản ánh đúng đặc trưng của văn bản biên niên, nhưng đồng thời làm tăng trọng số của một số mẫu khi tối ưu mô hình và khiến quy mô dữ liệu hiệu dụng thấp hơn số dòng danh nghĩa.
+
+\subsection{Tiền xử lý dữ liệu}
+
+Dữ liệu cung cấp đã trải qua các bước căn chỉnh và làm sạch cơ bản trước khi được sử dụng trong đề tài. Quy trình thể hiện qua cấu trúc và nội dung tệp gồm các bước chính sau:
+
+\begin{enumerate}
+    \item \textbf{Căn chỉnh song ngữ:} mỗi câu tiếng Việt được ghép với một câu Hán văn tương ứng và lưu ở cùng số dòng trong hai tệp. Tập train sử dụng kết quả tự động căn chỉnh, còn validation và test sử dụng các cặp đã được căn chỉnh thủ công.
+    \item \textbf{Phân chia và cố định dữ liệu:} các cặp câu được chia sẵn thành train, validation và test. Nhóm giữ nguyên các phân hoạch này trong toàn bộ thí nghiệm; validation được dùng để lựa chọn checkpoint và cấu hình, còn test chỉ được mở để đánh giá sau khi lựa chọn mô hình đã được đóng băng.
+    \item \textbf{Chuẩn hóa bề mặt:} toàn bộ câu tiếng Việt được chuyển về chữ thường; dấu câu đã được loại bỏ ở cả hai phía. Các khoảng trắng được dùng làm dấu phân cách token và không có dòng rỗng trong sáu tệp song song.
+    \item \textbf{Tách Hán tự:} phía Hán văn được chèn khoảng trắng giữa từng ký tự. Cách biểu diễn này tạo điều kiện cho việc xây dựng từ điển, huấn luyện và đánh giá ở cấp độ ký tự, đồng thời giảm phụ thuộc vào một công cụ phân đoạn từ dành cho tiếng Trung hiện đại.
+    \item \textbf{Kiểm tra toàn vẹn:} trước khi huấn luyện, số dòng hai phía được đối chiếu, các cặp trùng chính xác được thống kê và giao nhau giữa các phân hoạch được kiểm tra. Không thực hiện khử trùng lặp trên tập train trong thí nghiệm chính nhằm giữ nguyên phiên bản dữ liệu đã được cung cấp.
+    \item \textbf{Chuẩn bị theo mô hình:} đối với Fairseq, dữ liệu tiếp tục được mã hóa theo từ điển hoặc đơn vị dưới từ và chuyển sang định dạng nhị phân phục vụ huấn luyện. Đối với Qwen3-8B-Instruct, mỗi cặp được đóng gói thành mẫu chỉ dẫn gồm câu nguồn và câu trả lời đích; loss chỉ được tính trên phần câu trả lời. Các biến đổi này chỉ được học hoặc thiết lập từ tập train để tránh rò rỉ thông tin đánh giá.
+\end{enumerate}
+
+Kho tri thức ký tự được quản lý tách biệt với ngữ liệu song song. Nếu sử dụng trong thí nghiệm bổ sung, mỗi mục tri thức phải được truy xuất từ ký tự hoặc nội dung câu nguồn theo một quy tắc xác định trước; tuyệt đối không sử dụng câu tham chiếu của validation hoặc test để lựa chọn tri thức, sinh thêm dữ liệu huấn luyện hay điều chỉnh đầu ra.
+
+\subsection{Hạn chế của dữ liệu}
+
+Ngữ liệu có các hạn chế chính sau:
+
+\begin{itemize}
+    \item \textbf{Quy mô nhỏ và phạm vi hẹp:} chỉ có 19.218 cặp huấn luyện thuộc một tác phẩm sử học. Vì vậy, mô hình có thể học tốt văn phong và công thức biểu đạt của \textit{Đại Việt sử ký toàn thư} nhưng chưa chắc tổng quát hóa sang thơ, văn bia, chiếu biểu hoặc các văn bản cổ thuộc giai đoạn khác.
+    \item \textbf{Nhiễu từ căn chỉnh tự động:} tập train là dữ liệu \textit{silver}, nên có thể tồn tại cặp lệch câu, gộp--tách không tương ứng hoặc bản dịch chỉ tương đương một phần. Độ dài cực trị và tỷ lệ độ dài bất thường ở một số cặp là dấu hiệu cần được theo dõi, nhưng chưa đủ để tự động kết luận một cặp là sai.
+    \item \textbf{Trùng lặp trong tập train:} khoảng 8,3\% số dòng là lần lặp của các cặp đã xuất hiện. Điều này làm giảm lượng thông tin độc lập và có thể khiến mô hình thiên lệch về các cấu trúc biên niên có tần suất cao.
+    \item \textbf{Phân bố ký tự đuôi dài:} 1.137 Hán tự trong tập train chỉ xuất hiện một lần. Các thực thể lịch sử và ký tự hiếm vì thế khó được học ổn định, đặc biệt đối với Transformer huấn luyện từ đầu mà không có tri thức tiền huấn luyện hoặc nguồn bổ trợ.
+    \item \textbf{Mất thông tin do chuẩn hóa:} việc bỏ dấu câu làm giảm tín hiệu về ranh giới mệnh đề và cấu trúc cú pháp; chuyển tiếng Việt về chữ thường làm mất dấu hiệu nhận biết tên riêng. Các phép biến đổi này giúp thống nhất dữ liệu nhưng có thể làm tăng độ mơ hồ của câu nguồn.
+    \item \textbf{Thiếu ngữ cảnh tài liệu:} mỗi mẫu được xử lý như một cặp câu độc lập, trong khi việc giải thích đại từ tỉnh lược, chức danh, niên hiệu và thực thể trong sử liệu thường cần các câu trước hoặc sau. Mô hình cấp câu vì thế có thể chọn bản dịch hợp lý cục bộ nhưng không nhất quán trong toàn đoạn.
+    \item \textbf{Chỉ có một câu tham chiếu:} validation và test cung cấp một bản Hán văn cho mỗi câu tiếng Việt. Các cách diễn đạt khác vẫn đúng nghĩa có thể bị BLEU hoặc chrF++ đánh giá thấp; ngược lại, điểm toàn câu có thể che khuất lỗi nghiêm trọng ở một thực thể hoặc mốc thời gian.
+    \item \textbf{Chưa loại trừ trùng lặp gần nghĩa:} kiểm tra hiện tại chỉ xác nhận không có giao nhau chính xác giữa các phân hoạch. Các câu gần trùng, biến thể chính tả hoặc những đoạn có nội dung tương tự vẫn có thể tồn tại và cần phương pháp phát hiện ngữ nghĩa sâu hơn nếu muốn kiểm toán rò rỉ dữ liệu toàn diện.
+    \item \textbf{Hạn chế công bố:} ngữ liệu cốt lõi là tài sản nghiên cứu của phòng thí nghiệm và không được phân phối công khai \cite{projectspec2026}. Quy định này bảo vệ dữ liệu nhưng làm hạn chế khả năng kiểm chứng độc lập và tái lập hoàn toàn bởi các nhóm bên ngoài.
+\end{itemize}

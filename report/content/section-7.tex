@@ -1,0 +1,38 @@
+\section{Thảo luận, Hạn chế, kết luận} - Vũ, Phát
+
+\subsection{Thảo luận}
+\begin{itemize}
+\item Kết quả thực nghiệm cho thấy sự vượt trội hoàn toàn của phương pháp tinh chỉnh mô hình ngôn ngữ lớn (E2) so với mô hình NMT truyền thống huấn luyện từ đầu (E1).  
+
+\item Với mức chênh lệch trung bình lên tới +12.14 điểm BLEU và +10.29 điểm chrF++, E2 đã chứng minh rằng tri thức tiền huấn luyện (pre-training) đóng vai trò cốt lõi trong việc xử lý ngôn ngữ tài nguyên thấp như Hán văn cổ.  
+
+\item Trong khi mô hình E1 chật vật với các Hán tự hiếm và sinh ra lỗi <unk> do thiếu hụt dữ liệu huấn luyện, E2 có khả năng ánh xạ cực tốt các thực thể lịch sử từ phiên âm tiếng Việt sang Hán tự nhờ vào lượng tri thức nền (world knowledge) khổng lồ.  
+
+\item Tuy nhiên, sự khác biệt về kiến trúc cũng mang lại các hành vi lỗi trái ngược: NMT truyền thống (E1) có xu hướng dịch an toàn bằng cách lược bỏ thông tin (under-generation), trong khi LLM (E2) lại dễ rơi vào trạng thái ảo giác (hallucination), tự ý bổ sung ngữ nghĩa khi gặp câu nguồn mơ hồ. 
+\end{itemize}
+\subsection{Hạn chế}
+
+Nghiên cứu vẫn tồn tại một số giới hạn nhất định về mặt dữ liệu, kỹ thuật và thiết kế thực nghiệm:
+\begin{itemize}
+\item Hạn chế về dữ liệu: Ngữ liệu huấn luyện có quy mô nhỏ (19.218 cặp câu) và chỉ khu trú trong một tác phẩm duy nhất là Đại Việt sử ký toàn thư, do đó mô hình có thể gặp khó khăn khi tổng quát hóa sang các thể loại văn bản cổ khác như thơ, phú hay chiếu biểu.  
+
+\item Chất lượng tập huấn luyện: Tập Train là dữ liệu silver (căn chỉnh tự động) nên vẫn chứa nhiễu, đồng thời tồn tại khoảng 8,3\% số dòng là các cặp câu trùng lặp, làm giảm lượng thông tin độc lập và có thể khiến mô hình bị thiên lệch.  
+
+\item Thiếu ngữ cảnh tài liệu: Các câu được dịch một cách độc lập, làm mất đi các tín hiệu ngữ cảnh quan trọng cần thiết để giải thích đại từ tỉnh lược, chức danh hay niên hiệu trong sử liệu.  
+
+\item Hạn chế của chỉ số đánh giá: Tập kiểm định và kiểm thử chỉ cung cấp một câu tham chiếu duy nhất cho mỗi câu nguồn, điều này có thể khiến các chỉ số n-gram như BLEU đánh giá thấp các bản dịch có cách diễn đạt khác nhưng vẫn đúng nghĩa.  
+
+\item Ràng buộc phần cứng và khả năng tái lập: Giới hạn bộ nhớ VRAM 12GB đã chi phối phần lớn các cấu hình siêu tham số (như kích thước batch và giới hạn token). Bên cạnh đó, việc huấn luyện E1 từng bị ngắt quãng và phải chạy tiếp nối, cũng như sự sai lệch mã băm (hash) trong hồ sơ đóng băng (freeze record) của E2 khi tăng số epoch, là những điểm yếu ảnh hưởng đến khả năng tái lập hoàn hảo chỉ bằng một lệnh chạy duy nhất.  
+
+\item Sự bất cân xứng trong thiết kế đối chứng: Việc so sánh giữa E1 và biến thể E3-custom chưa thực sự hoàn hảo do sự chênh lệch về kích thước mô hình, chiều dài đầu vào và số lượng câu thực tế trong mỗi batch.
+\end{itemize}
+\subsection{Kết luận}
+\begin{itemize}
+\item Nghiên cứu đã hoàn thành mục tiêu xây dựng và đối chiếu thành công hai hệ thống dịch máy từ tiếng Việt sang Hán văn cổ trong điều kiện dữ liệu giới hạn.  
+
+\item Trả lời cho các câu hỏi nghiên cứu, có thể khẳng định rằng việc áp dụng kỹ thuật QLoRA để tinh chỉnh mô hình ngôn ngữ lớn (Qwen3-8B) mang lại hiệu quả vượt xa so với việc huấn luyện mô hình Transformer từ đầu.  
+
+\item Phương pháp LLM không chỉ cải thiện mạnh mẽ các chỉ số đánh giá tự động mà còn giải quyết xuất sắc bài toán dịch thực thể lịch sử - một trong những thách thức lớn nhất của miền văn bản cổ.  
+
+\item Mặc dù còn những tồn đọng liên quan đến hiện tượng ảo giác của LLM và các giới hạn về tài nguyên phần cứng, đồ án đã cung cấp một quy trình thực nghiệm rõ ràng, mã nguồn đóng băng chặt chẽ và một hệ thống phân loại lỗi đặc thù, tạo tiền đề vững chắc cho các nghiên cứu xử lý ngôn ngữ lịch sử trong tương lai.
+\end{itemize}

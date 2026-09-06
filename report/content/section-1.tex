@@ -1,0 +1,72 @@
+\section{Giới thiệu}
+
+\subsection{Bối cảnh}
+
+\subsubsection{Bài toán dịch máy}
+
+Dịch máy (hay còn được biết đến với tên Machine Translation--MT) là bài toán tự động, chuyển một chuỗi văn bản từ ngôn ngữ nguồn sang ngôn ngữ đích, sao cho vừa bảo toàn nội dung, vừa tạo ra câu phù hợp với từ vựng và cú pháp của ngôn ngữ đích. Với sự phát triển của học sâu, dịch máy nơ-ron (Neural Machine Translation--NMT) mô hình hóa trực tiếp xác suất của câu đích theo câu nguồn. Kiến trúc Transformer, dựa trên cơ chế attention, đã trở thành nền tảng phổ biến của NMT nhờ khả năng mô hình hóa quan hệ phụ thuộc xa và huấn luyện song song hiệu quả \cite{vaswani2017attention}.
+
+Tuy nhiên, hiệu quả của NMT phụ thuộc đáng kể vào quy mô và chất lượng của ngữ liệu song song. Trong bối cảnh tài nguyên thấp, mô hình huấn luyện từ đầu dễ quá khớp và khó học được các ánh xạ hiếm. Nghiên cứu của Atrio và Popescu-Belis cho thấy cấu hình phù hợp với dữ liệu lớn không thể được áp dụng máy móc cho dữ liệu nhỏ; Cụ thể, batch nhỏ có thể tạo hiệu ứng điều chuẩn và giúp Transformer tổng quát hóa tốt hơn \cite{atrio2021small}. Vì vậy, bài toán của đề tài không chỉ là lựa chọn một kiến trúc dịch, mà còn là xây dựng một quy trình thực nghiệm phù hợp với miền dữ liệu chuyên biệt và có quy mô hạn chế.
+
+Trong nghiên cứu này, hướng dịch được khảo sát là tiếng Việt sang Hán văn cổ (Việt $\rightarrow$ Hán cổ). Hai cách tiếp cận được đối chiếu gồm: (i) mô hình Transformer NMT huấn luyện trên ngữ liệu của đề tài bằng Fairseq; và (ii) mô hình ngôn ngữ lớn đã tiền huấn luyện, sau đó thích nghi miền bằng QLoRA. Sự đối chiếu này cho phép đánh giá khác biệt giữa việc học ánh xạ dịch từ đầu và việc tận dụng tri thức ngôn ngữ có sẵn của mô hình nền tảng.
+
+\subsubsection{Đặc thù của dịch máy văn bản cổ}
+
+Trong phạm vi đề tài, ``văn bản cổ'' được xác định theo miền nội dung: văn bản có nguồn gốc lịch sử hoặc cổ điển, sử dụng lối diễn đạt văn chương, đồng thời chứa nhiều thực thể, chức danh, địa danh, sự kiện, niên hiệu và biểu thức văn hóa đặc thù \cite{projectspec2026}. Khái niệm này không đồng nhất với việc cả hai phía của cặp câu đều phải sử dụng ngôn ngữ cổ. Cụ thể, câu nguồn trong bộ dữ liệu là bản diễn giải tiếng Việt tương đối hiện đại, còn câu đích là Hán văn cổ trích từ \textit{Đại Việt sử ký toàn thư}.
+
+So với dịch văn bản hiện đại, dịch sang Hán văn cổ đặt ra ba khó khăn chính. Thứ nhất, Hán văn cổ có tính hàm súc cao, thường lược bỏ chủ ngữ, đại từ và các thành phần có thể suy ra từ ngữ cảnh; do đó, quan hệ giữa câu tiếng Việt và câu Hán không phải lúc nào cũng là ánh xạ từng từ. Thứ hai, một âm đọc hoặc một tên riêng tiếng Việt có thể tương ứng với nhiều Hán tự, trong khi việc chọn sai một ký tự có thể làm thay đổi thực thể hoặc ý nghĩa lịch sử. Thứ ba, các chức quan, địa danh cổ, niên hiệu, con số và mốc thời gian xuất hiện không đồng đều, khiến nhiều đơn vị quan trọng có tần suất rất thấp trong tập huấn luyện. Mô hình vì thế phải đồng thời học phép chuyển đổi ngôn ngữ, quy ước biểu đạt cổ điển và tri thức đặc thù của sử liệu.
+
+Để đánh giá tự động chất lượng bản dịch, nghiên cứu sử dụng hai chỉ số chính là SacreBLEU và chrF++. SacreBLEU là cách triển khai chuẩn hóa của BLEU, đo mức độ trùng khớp các n-gram giữa câu do mô hình sinh ra và câu tham chiếu, đồng thời áp dụng hệ số phạt khi bản dịch quá ngắn \cite{papineni2002bleu,post2018sacrebleu}. Việc ghi lại thống nhất bộ tách từ và chữ ký cấu hình của SacreBLEU giúp kết quả giữa các mô hình có thể được so sánh và tái lập; điểm số càng cao thể hiện mức độ tương đồng bề mặt với bản dịch tham chiếu càng lớn.
+
+chrF++ đánh giá bản dịch bằng điểm F dựa chủ yếu trên độ chính xác và độ bao phủ của các n-gram ký tự, đồng thời bổ sung n-gram cấp từ \cite{popovic2015chrf,popovic2017chrfpp}. So với BLEU, chỉ số này ít phụ thuộc hơn vào cách phân tách từ và nhạy với mức độ tương đồng ở cấp độ ký tự. Đặc điểm đó phù hợp với dữ liệu Hán văn của đề tài vì câu đích đã được tách thành từng Hán tự bằng khoảng trắng.
+
+Tuy nhiên, cả hai chỉ số chủ yếu đo sự tương đồng hình thức và không thay thế hoàn toàn việc đánh giá ngữ nghĩa. Một bản dịch có thể khác bề mặt so với câu tham chiếu nhưng vẫn gần nghĩa; ngược lại, chỉ một Hán tự sai trong tên người, địa danh hoặc niên hiệu đã có thể tạo ra lỗi nghiêm trọng dù điểm toàn câu còn cao. Do đó, SacreBLEU và chrF++ cần được sử dụng kết hợp với phân tích lỗi thủ công, đặc biệt đối với lỗi thực thể, số liệu--thời gian, bỏ sót và tự bổ sung thông tin.
+
+\subsubsection{Đặc điểm của dữ liệu văn bản cổ}
+
+Ngữ liệu cốt lõi của đề tài được xây dựng từ \textit{Đại Việt sử ký toàn thư} và đã được cố định thành ba tập. Tập huấn luyện gồm 19.218 cặp câu được tự động căn chỉnh; tập validation và tập test mỗi tập gồm 510 cặp câu được căn chỉnh thủ công để dùng làm dữ liệu chuẩn đánh giá. Cách tổ chức này tạo ra sự khác biệt về độ tin cậy giữa dữ liệu huấn luyện dạng \textit{silver} và dữ liệu đánh giá dạng \textit{gold}, đồng thời yêu cầu mô hình phải chống chịu được nhiễu căn chỉnh trong quá trình học.
+
+Dữ liệu đã được chuẩn hóa về chữ thường ở phía tiếng Việt và loại bỏ dấu câu ở cả hai phía. Ở phía Hán văn, các Hán tự được phân tách bằng khoảng trắng; độ dài trung bình lần lượt xấp xỉ 18,62 Hán tự và 20,92 từ tiếng Việt trên mỗi cặp huấn luyện. Ngoài chênh lệch độ dài giữa hai ngôn ngữ, tập huấn luyện còn có các câu rất ngắn, các câu dài bất thường và một số dòng trùng lặp. Những yếu tố này có thể ảnh hưởng đến phân phối batch, quá trình học căn chỉnh và khả năng tổng quát hóa.
+
+Bên cạnh ngữ liệu song song, gói dữ liệu còn cung cấp kho tri thức có cấu trúc cho khoảng 16.000 Hán/Nôm tự, bao gồm thông tin về âm đọc, nghĩa, cấu tạo và ví dụ. Nguồn tri thức này có tiềm năng hỗ trợ xử lý ký tự hiếm và các ánh xạ Việt--Hán mơ hồ, nhưng phải được xem là nguồn bổ trợ, được tách biệt khỏi thí nghiệm cốt lõi và không được làm rò rỉ thông tin từ tập validation hoặc test. Ngoài ra, do đây là tài sản nghiên cứu của phòng thí nghiệm, ngữ liệu cốt lõi không được công bố hoặc phân phối lại công khai \cite{projectspec2026}.
+
+\subsection{Nêu vấn đề}
+
+Bài toán trung tâm của đề tài là xây dựng hệ thống dịch từ tiếng Việt sang Hán văn cổ trong điều kiện dữ liệu song song ít, dữ liệu huấn luyện có thể chứa nhiễu căn chỉnh và miền đích có nhiều ký tự, thực thể lịch sử cùng cấu trúc diễn đạt hiếm. Một Transformer huấn luyện từ đầu có ưu điểm là quy trình rõ ràng và dễ kiểm soát, nhưng có thể thiếu tri thức để xử lý các trường hợp ít xuất hiện. Ngược lại, mô hình ngôn ngữ lớn có tri thức tiền huấn luyện rộng hơn, song vẫn cần thích nghi miền, kiểm soát đầu ra và hạn chế việc sinh thêm thông tin không có trong câu nguồn.
+
+Từ đó, nghiên cứu cần giải quyết đồng thời bốn vấn đề: thiết lập một baseline NMT có thể tái lập; thích nghi một mô hình ngôn ngữ lớn cho miền Hán văn cổ; so sánh hai hướng tiếp cận bằng các phép đo nhất quán; và xác định những loại lỗi mà điểm số tổng hợp chưa phản ánh đầy đủ. Việc lựa chọn mô hình không chỉ dựa trên BLEU cao hơn, mà còn phải xét khả năng bảo toàn thực thể, số liệu, mốc thời gian, mức độ đầy đủ của bản dịch và nguy cơ sinh nội dung không được hỗ trợ bởi câu nguồn.
+
+\subsection{Mục tiêu nghiên cứu}
+
+Đề tài hướng đến các mục tiêu sau:
+
+\begin{enumerate}
+    \item Xây dựng baseline Transformer bằng Fairseq cho hướng dịch Việt $\rightarrow$ Hán cổ với cấu hình huấn luyện, giải mã và checkpoint có thể tái lập.
+    \item Thích nghi mô hình ngôn ngữ lớn Qwen3-8B-Instruct cho miền văn bản cổ bằng QLoRA 4-bit, qua đó tận dụng tri thức tiền huấn luyện trong giới hạn tài nguyên tính toán của đề tài.
+    \item So sánh công bằng baseline NMT và mô hình ngôn ngữ lớn trên cùng các phân hoạch dữ liệu đã cố định, sử dụng SacreBLEU và chrF++ với phiên bản và cấu hình được ghi nhận đầy đủ.
+    \item Phân tích đầu ra theo các nhóm lỗi gồm dịch sai, bỏ sót, tự bổ sung thông tin, lỗi thực thể và lỗi số liệu--thời gian; từ đó làm rõ ưu, nhược điểm của từng cách tiếp cận.
+    \item Khảo sát khả năng khai thác kho tri thức ký tự như một thí nghiệm bổ sung, đồng thời tuân thủ nguyên tắc nguồn gốc dữ liệu và phòng tránh rò rỉ train--validation--test.
+\end{enumerate}
+
+\subsection{Câu hỏi nghiên cứu}
+
+Nghiên cứu tập trung trả lời các câu hỏi sau:
+
+\begin{description}
+    \item[RQ1.] Trong điều kiện ngữ liệu \textit{Đại Việt sử ký toàn thư} có quy mô hạn chế, Transformer huấn luyện từ đầu đạt chất lượng dịch Việt $\rightarrow$ Hán cổ ở mức nào?
+    \item[RQ2.] Việc thích nghi Qwen3-8B-Instruct bằng QLoRA cải thiện SacreBLEU và chrF++ như thế nào so với baseline Transformer khi hai mô hình được đánh giá trên cùng tập test đã cố định?
+    \item[RQ3.] Hai mô hình khác nhau ra sao về mức độ bảo toàn nội dung và phân bố các lỗi dịch sai, bỏ sót, tự bổ sung, thực thể và số liệu--thời gian?
+    \item[RQ4.] Nguồn tri thức ký tự bổ trợ có giúp cải thiện khả năng xử lý Hán tự hiếm và ánh xạ Việt--Hán mơ hồ so với baseline không sử dụng tri thức hay không?
+\end{description}
+
+\subsection{Đóng góp của đề tài}
+
+Các đóng góp chính của đề tài gồm:
+
+\begin{itemize}
+    \item Hệ thống hóa các thách thức của dịch tiếng Việt sang Hán văn cổ trên ngữ liệu sử học, nhấn mạnh sự khác biệt giữa miền nội dung cổ và hình thức ngôn ngữ cổ.
+    \item Xây dựng quy trình thực nghiệm có thể tái lập cho hai hướng tiếp cận: Transformer NMT huấn luyện từ đầu và mô hình ngôn ngữ lớn thích nghi miền bằng QLoRA.
+    \item Cung cấp phép so sánh định lượng trên các tập dữ liệu đã cố định, kết hợp đánh giá ở cấp độ n-gram, ký tự và kiểm định thống kê để hạn chế kết luận dựa trên chênh lệch điểm ngẫu nhiên.
+    \item Thiết lập khung phân tích lỗi theo đặc thù sử liệu, trong đó tách biệt lỗi dịch thông thường với việc mô hình tự bổ sung thông tin, đồng thời chú trọng lỗi thực thể và số liệu--thời gian.
+    \item Khảo sát vai trò của tri thức ký tự bổ trợ đối với bài toán tài nguyên thấp và lưu trữ đầy đủ cấu hình, dự đoán, chỉ số cùng checkpoint để hỗ trợ tái sử dụng trong các nghiên cứu tiếp theo.
+\end{itemize}

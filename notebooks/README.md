@@ -1,5 +1,12 @@
 # Kaggle wrappers
 
+Evaluation uses `moses-char-v1`; see [the exact protocol](../docs/MOSES_EVALUATION.md).
+The consolidated notebook validates old bundles using their recorded protocol,
+then generates Moses results for plots and the final export under `metrics/moses/`.
+Its setup installs the pinned Sacremoses dependency. Training and inference
+tokenizers are unchanged; an evaluation-only rescore does not require rerunning
+the modeling cells. Locally, use `make rescore-moses` for that workflow.
+
 The notebooks in this directory are intentionally thin. Upload this repository and the restricted corpus through private Kaggle resources, update `REPO_DIR`, and execute the command-line implementation. Do not copy training logic into notebook cells or publish a Kaggle dataset containing the corpus. The local `artifacts/e2_kaggle_source.zip` is private, generated, ignored, and must be rebuilt after source changes; never stage it.
 
 The E2-only wrapper restores the saved manifest versions and latest complete Trainer checkpoint from the three-epoch run, resumes to a total of five epochs, and executes every command with checked exit status. It then performs validation, freezing, test evaluation, and an artifact-only export that excludes the corpus.

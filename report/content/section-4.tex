@@ -1,0 +1,335 @@
+\section{Thiết lập thực nghiệm}
+
+Chương này trình bày điều kiện triển khai và phạm vi đánh giá của ba hệ thống
+E1, E2 và E3-custom. Kiến trúc mô hình, quy trình huấn luyện, tiêu chí lựa chọn
+checkpoint, chuẩn hoá đầu ra và phương pháp chấm điểm đã được trình bày trong
+phần Phương pháp. Vì vậy, phần này chỉ mô tả phần cứng, môi trường phần mềm,
+thiết lập ngẫu nhiên, các ràng buộc tài nguyên và cấu hình triển khai cần thiết
+để diễn giải kết quả.
+
+\subsection{Môi trường tính toán}
+
+\subsubsection{Phần cứng}
+
+Ba hệ thống được huấn luyện trên cùng một máy \texttt{laboratory}, sử dụng một
+GPU \texttt{NVIDIA GeForce RTX 3060} với 12.488.343.552 byte bộ nhớ (xấp xỉ
+12,5~GB). Các run manifest đều ghi nhận
+\texttt{distributed\_world\_size=1}; do đó, không kết quả nào trong báo cáo
+được tạo bởi thiết lập đa GPU.
+
+E1 và E3-custom được chạy trên
+\texttt{Linux-7.0.0-28-generic-x86\_64-with-glibc2.39}. Đoạn chạy tiếp hiện được
+ghi trong manifest của E2 sử dụng
+\texttt{Linux-7.0.0-30-generic-x86\_64-with-glibc2.39}. Sự khác biệt này phản
+ánh trạng thái hệ thống tại thời điểm chạy, không phải khác biệt về phần cứng.
+Các notebook Kaggle trong repo chỉ cung cấp đường chạy dự phòng và không sinh
+ra các kết quả được báo cáo.
+
+\subsubsection{Môi trường phần mềm}
+
+Dự án duy trì ba môi trường Conda tách biệt để cô lập các phụ thuộc của
+Fairseq, QLoRA và bộ đánh giá. Cách tổ chức này tránh việc ép Fairseq 0.12.2 và
+các kernel lượng tử hoá 4-bit của \texttt{bitsandbytes} vào cùng một software
+stack. Bảng~\ref{tab:compute-env} ghi phiên bản thực tế trong các artifact hiện
+có; hàng E2 tương ứng với đoạn chạy tiếp đến step 910.
+
+\begin{table}[tbp]
+  \centering
+  \small
+  \renewcommand{\arraystretch}{1.18}
+  \caption{Các môi trường Conda và phiên bản được ghi trong artifact hiện tại.}
+  \label{tab:compute-env}
+  \begin{tabularx}{\textwidth}{@{}>{\ttfamily}p{2.3cm}p{2.3cm}p{3.15cm}X@{}}
+    \toprule
+    \normalfont\textbf{Môi trường} & \textbf{Dùng cho}
+      & \textbf{Python / PyTorch / CUDA} & \textbf{Thư viện chính} \\
+    \midrule
+    .conda/\allowbreak fairseq
+      & E1, E3-custom
+      & 3.10.20 / 1.13.1 / 11.7
+      & \texttt{fairseq} 0.12.2 \\
+    .conda/llm
+      & E2
+      & 3.10.20 / 2.6.0+cu124 / 12.4
+      & \texttt{transformers} 4.57.6; \texttt{peft} 0.20.0;
+        \texttt{bitsandbytes} 0.50.1; \texttt{accelerate} 1.14.0;
+        \texttt{datasets} 4.8.5 \\
+    .conda/eval
+      & Chấm điểm, kiểm toán, kiểm thử
+      & 3.10.20 / --- / ---
+      & \texttt{sacrebleu} 2.6.0; \texttt{PyYAML} 6.0.2;
+        \texttt{pytest} 8.4.1 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Tệp khai báo môi trường E2 từng đặt PyTorch 2.5.1, trong khi manifest của đoạn
+chạy tiếp ghi \texttt{2.6.0+cu124}; Bảng~\ref{tab:compute-env} ưu tiên phiên bản
+đã được ghi nhận khi chạy. Việc chấm điểm được tách khỏi các môi trường huấn
+luyện: mọi metric artifact dùng SacreBLEU 2.6.0 và lưu chữ ký chứa
+\texttt{version:2.6.0}. Vì vậy, cả ba hệ thống được chấm bằng cùng một phiên bản
+bộ đánh giá, dù software stack dùng để huấn luyện khác nhau.
+
+\subsubsection{Kiểm soát ngẫu nhiên và khả năng lặp lại}
+
+Cả ba cấu hình đặt \texttt{seed: 42}. Với Fairseq, pipeline:
+\begin{itemize}
+  \item bật \texttt{cudnn.deterministic} và tắt
+  \texttt{cudnn.benchmark};
+  \item gọi \texttt{use\_deterministic\_algorithms} ở chế độ
+  \texttt{warn\_only};
+  \item đặt \texttt{CUBLAS\_WORKSPACE\_CONFIG=:4096:8} và
+  \texttt{PYTHONHASHSEED} cho tiến trình huấn luyện.
+\end{itemize}
+Với QLoRA, \texttt{set\_seed} được gọi trước khi huấn luyện và sinh dự đoán;
+\texttt{TrainingArguments} nhận cả \texttt{seed} và \texttt{data\_seed}; bước
+packing sử dụng một generator riêng cũng được khởi tạo từ 42.
+
+Các thiết lập trên làm giảm biến thiên và tăng khả năng lặp lại khi giữ nguyên
+ngăn xếp phần cứng và phần mềm. Tuy nhiên, chế độ \texttt{warn\_only} không buộc mọi
+CUDA operation phải tất định, nên chúng không cấu thành cam kết tái lập
+bit-for-bit khi đổi GPU, driver, CUDA hoặc phiên bản thư viện.
+
+\subsection{Cấu hình triển khai}
+
+\subsubsection{Ràng buộc tài nguyên}
+
+Giới hạn 12,5~GB VRAM chi phối một số lựa chọn triển khai. Với E2, trọng số nền
+Qwen3-8B được lượng tử hoá NF4 kèm double quantization; chỉ LoRA adapter nhận
+gradient. Cấu hình đồng thời sử dụng gradient checkpointing,
+\texttt{paged\_adamw\_8bit}, một packed window trên mỗi thiết bị, tích luỹ
+gradient qua 16 bước và độ dài cửa sổ 768 token. Với E1 và E3-custom,
+\texttt{max\_tokens\_per\_gpu=1000} kết hợp \texttt{update\_freq=4}, tương ứng
+với ngân sách khai báo khoảng 4.000 token cho mỗi lần cập nhật tham số.
+
+Các lựa chọn này mô tả cách ba hệ thống được triển khai trên phần cứng sẵn có;
+chúng không phải kết quả của một nghiên cứu ablation về bộ nhớ hoặc batch size.
+Ảnh hưởng quan sát được của giới hạn này được trình bày cùng các phát hiện thực
+nghiệm.
+
+\subsubsection{Tóm tắt cấu hình thực tế}
+
+Bảng~\ref{tab:exp-recap} cung cấp một bản tóm tắt để đối chiếu nhanh; định nghĩa
+đầy đủ của từng mô hình và realized protocol nằm trong phần Phương pháp.
+
+\begin{table}[tbp]
+  \centering
+  \footnotesize
+  \renewcommand{\arraystretch}{1.16}
+  \setlength{\tabcolsep}{3.5pt}
+  \caption{Tóm tắt cấu hình triển khai của ba hệ thống được đánh giá.}
+  \label{tab:exp-recap}
+  \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.35cm}XXX@{}}
+    \toprule
+    & E1 & E2 & E3-custom \\
+    \midrule
+    Khung mô hình
+      & Transformer 6+6, $d=512$, 67,65M tham số
+      & Qwen3-8B đóng băng + LoRA $r=16$, $\alpha=32$
+      & Như E1, nguồn được bổ sung gợi ý, 74,64M tham số \\
+    Độ chính xác
+      & fp16
+      & Trọng số nền NF4 4-bit, double quantization; tính toán fp16
+      & fp16 \\
+    Bộ tối ưu
+      & Adam, $5\times10^{-4}$, inverse-sqrt, warmup 8.000
+      & Paged AdamW 8-bit, $2\times10^{-4}$, cosine, warmup ratio 0,05
+      & Như E1 \\
+    Đơn vị batch
+      & 1.000 token $\times$ tích luỹ 4
+      & 1 packed window $\times$ tích luỹ 16
+      & Như E1 \\
+    Ngân sách thực tế
+      & Dừng ở epoch 171 / update 24.791
+      & Chạy tiếp từ 3 epoch / 546 step đến 5 epoch / 910 step
+      & Chạm 50.000 update ở epoch 87 \\
+    Chọn checkpoint
+      & Validation BLEU, epoch 151
+      & Validation \texttt{eval\_loss}, step 400
+      & Validation BLEU, epoch 77 \\
+    Giải mã
+      & Beam 7; $1{,}2|x|+10$
+      & Beam 4; $\min(512,\lceil2|x|\rceil+32)$
+      & Như E1 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Đơn vị batch của hai backend không quy đổi trực tiếp: Fairseq giới hạn số token
+trên mỗi GPU, còn E2 đếm các cửa sổ đã packing. Do đó, hàng “Đơn vị batch”
+không được diễn giải như một so sánh về số câu trong mỗi update.
+
+\subsection{Phạm vi thực nghiệm}
+
+Báo cáo so sánh ba hệ thống dịch Việt $\rightarrow$ Hán văn trên cùng các phân
+hoạch cố định của ngữ liệu \emph{Đại Việt sử ký toàn thư}: E1 là Transformer
+huấn luyện từ đầu; E2 là Qwen3-8B thích nghi bằng QLoRA; E3-custom là E1 với
+câu nguồn được bổ sung gợi ý Hán tự từ kho tri thức. Đây là so sánh cấp hệ
+thống, không phải một chuỗi ablation kiểm soát từng biến. Các bất biến về dữ
+liệu, quy trình lựa chọn trên validation, cổng đóng băng tập test và bộ đánh
+giá chung đã được định nghĩa trong phần Phương pháp.
+
+Hai hệ thống trong đặc tả ban đầu không thuộc tập kết quả. E3 chính thức phụ
+thuộc integration \texttt{knowledge\_v2} chưa có trong repo và vì vậy ở trạng
+thái blocked; hệ thống đã chạy phải luôn được ghi là E3-custom. E4, tức Qwen3
+kết hợp cơ chế truy hồi của E3-custom, mới được cài đặt và chạy preflight ước
+lượng chi phí, chưa được huấn luyện. Báo cáo không gán kết quả định lượng cho
+E3 chính thức hoặc E4.
+
+
+\subsection{Chi phí tính toán và hành vi huấn luyện}
+
+\subsubsection{Chi phí huấn luyện thực đo}
+
+Bảng~\ref{tab:wallclock} tổng hợp thời gian huấn luyện quan sát được trên cùng
+một RTX 3060. Các giá trị không bao gồm thời gian tiền xử lý, sinh dự đoán hoặc
+chấm điểm.
+
+\begin{table}[tbp]
+  \centering
+  \small
+  \renewcommand{\arraystretch}{1.18}
+  \caption{Tổng thời gian huấn luyện ghi nhận của ba hệ thống.}
+  \label{tab:wallclock}
+  \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{3.4cm}p{3.1cm}X@{}}
+    \toprule
+    Hệ thống & Tổng wall-clock & Ghi chú \\
+    \midrule
+    E1
+      & $\approx$ 3.209,5 s ($\approx$ 53,5 phút)
+      & Cộng khoảng 90 s của lần chạy bị ngắt và 3.119,5 s của đoạn chạy tiếp
+        từ checkpoint tại epoch 5 / update 579 \\
+    E3-custom
+      & 4.758,7 s ($\approx$ 79,3 phút)
+      & Một lượt chạy; chạm \texttt{max\_update=50000} \\
+    E2
+      & 33.940,7 s ($\approx$ 9,43 giờ)
+      & Cộng đoạn đầu 20.328,3 s và đoạn chạy tiếp 13.612,4 s từ checkpoint
+        546 đến step 910 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Tổng của E1 là tổng thời gian còn quan sát được qua hai đoạn, không phải phép đo
+của một lượt huấn luyện sạch từ đầu đến cuối. Tương tự, tổng E2 được tái dựng
+từ thời gian đã ghi cho đoạn đầu và \texttt{train\_runtime} của đoạn chạy tiếp;
+log chi tiết của đoạn đầu không còn trong artifact hiện tại. Vì vậy, các con số
+này phù hợp để mô tả chi phí đã ghi nhận, nhưng không nên được diễn giải như
+benchmark tốc độ chuẩn hoá giữa các kiến trúc.
+
+\subsubsection{Ảnh hưởng quan sát được của giới hạn bộ nhớ}
+
+Khi E3-custom bổ sung danh sách gợi ý Hán tự, số token nguồn tăng xấp xỉ
+3,9 lần. Dưới cùng giới hạn \texttt{max\_tokens\_per\_gpu=1000}, số câu trung
+bình trong mỗi update giảm từ 132,5 ở E1 xuống 33,3 ở E3-custom. Vì vậy, E1 và
+E3-custom không chỉ khác nhau ở nội dung đầu vào: số câu đóng góp vào mỗi lần
+cập nhật cũng khác do giới hạn bộ nhớ. Đây là một confound của phép so sánh cấp
+hệ thống, không phải bằng chứng riêng về hiệu quả của cơ chế truy hồi.
+
+\subsubsection{Diễn biến validation và lựa chọn checkpoint của E2}
+\label{sec:e2-budget}
+
+E2 ban đầu được huấn luyện trong 3 epoch, tương ứng 546 optimizer step, rồi chạy
+tiếp đến 5 epoch và 910 step từ checkpoint 546. Với
+\texttt{eval\_steps=200}, toàn bộ quá trình chỉ có bốn điểm đánh giá validation
+(Bảng~\ref{tab:e2-budget}).
+
+\begin{table}[tbp]
+  \centering
+  \small
+  \renewcommand{\arraystretch}{1.18}
+  \caption{Các điểm đánh giá validation của E2 qua 910 step.}
+  \label{tab:e2-budget}
+  \begin{tabularx}{\textwidth}{@{}rrrX@{}}
+    \toprule
+    \textbf{Step} & \textbf{Epoch} & \textbf{\texttt{eval\_loss}}
+      & \textbf{Giai đoạn} \\
+    \midrule
+    200 & 1,10 & 1,4444 & Ba epoch ban đầu \\
+    400 & 2,20 & \textbf{1,4322} & Ba epoch ban đầu; checkpoint được chọn \\
+    600 & 3,30 & 1,4659 & Đoạn chạy tiếp \\
+    800 & 4,40 & 1,5815 & Đoạn chạy tiếp \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+Trong bốn điểm được đo, \texttt{eval\_loss} thấp nhất ở step 400 và cao hơn ở
+step 600 và 800. Do Trainer dùng \texttt{load\_best\_model\_at\_end} theo
+\texttt{eval\_loss}, adapter xuất ra sau step 910 vẫn mang trọng số của
+checkpoint 400. SHA-256 của \texttt{adapter\_model.safetensors} xuất ra trùng
+với file tương ứng trong checkpoint 400, trong khi khác checkpoint 800 và 910.
+
+Kết quả này cho thấy phần ngân sách kéo dài không thay đổi checkpoint được chọn;
+nó không tạo thành một hệ thống E2 mới. Tuy nhiên, bốn điểm đánh giá là một lưới
+thưa và tiêu chí lựa chọn là loss, không phải BLEU. Vì vậy, bằng chứng chỉ hỗ trợ
+nhận định rằng validation loss đo được tăng sau step 400; nó không xác định
+chính xác thời điểm bắt đầu overfitting và cũng không chứng minh bản dịch ở 5
+epoch kém hơn theo BLEU.
+
+% \subsection{Các chỉ số đánh giá} - Phát
+
+% 3. Evaluation Metrics - Phát
+% 3.1 SacreBLEU
+% 3.2 chrF++
+% 3.3 COMET
+
+% \subsection{Evaluation Procedure} - Phát
+
+
+\subsection{Evaluation Metrics (Chỉ số đánh giá)}
+
+Để đánh giá chất lượng của các mô hình dịch máy từ tiếng Việt sang Hán văn cổ (Việt $\rightarrow$ Hán cổ), nghiên cứu này sử dụng hai chỉ số đánh giá tự động phổ biến: SacreBLEU và chrF++. Do ngữ liệu đích đã được phân tách bằng khoảng trắng ở cấp độ từng Hán tự, các chỉ số này chủ yếu phản ánh mức độ tương đồng ở cấp độ ký tự (character level).
+
+\subsubsection{4.3.1 SacreBLEU}
+Chỉ số BLEU (Bilingual Evaluation Understudy) đánh giá độ tương đồng giữa bản dịch do mô hình sinh ra và bản dịch tham chiếu dựa trên tỷ lệ trùng khớp của các n-gram (với $n \le 4$).
+\begin{itemize}
+    \item \textbf{Cấu hình thực tế:} Điểm BLEU-4 được tính bằng thư viện \texttt{SacreBLEU}, qua đó bảo đảm tính chuẩn hóa và nhất quán. Phiên bản được sử dụng trong kho mã nguồn là \texttt{2.6.0}.
+    \item \textbf{Chữ ký cấu hình (signature):} Cấu hình cụ thể của chỉ số BLEU được ghi lại bằng chữ ký tiêu chuẩn \texttt{nrefs:1|case:mixed|eff:no|tok:13a|smooth:exp|version:2.6.0}. Trong đó, phương pháp làm mượt là \texttt{exp} (exponential smoothing) và tùy chọn \texttt{effective\_order} không được sử dụng.
+    \item \textbf{Bộ tách từ:} Theo đặc tả, cả bốn nhóm thí nghiệm phải sử dụng thống nhất bộ tách từ Moses để bảo đảm độ tin cậy của phép so sánh giữa các hướng dịch. Trong \texttt{SacreBLEU 2.6.0}, cấu hình \texttt{tok:13a} tương ứng với bộ tách từ \texttt{mteval-v13a} của Moses. Do ngữ liệu Hán văn cổ đích đã được tiền xử lý bằng cách chèn khoảng trắng giữa từng Hán tự, bộ tách từ ít ảnh hưởng đến kết quả; vì vậy, điểm BLEU thu được về cơ bản phản ánh mức độ tương đồng ở cấp độ ký tự.
+\end{itemize}
+
+\subsubsection{4.3.2 chrF++}
+Chỉ số chrF++ là phiên bản mở rộng của chrF, kết hợp độ tương đồng ở cấp độ ký tự (character-level similarity) với thông tin ở cấp độ từ (word-level information). Chất lượng bản dịch được đánh giá dựa trên độ chính xác (precision), độ bao phủ (recall) và điểm F (F-score).
+\begin{itemize}
+    \item \textbf{Độ tương đồng ở cấp độ ký tự (character n-gram):} Chỉ số đo tỷ lệ trùng khớp của các n-gram ký tự có độ dài từ 1 đến 6 giữa bản dịch của mô hình và bản dịch tham chiếu. Thành phần này giúp ghi nhận các biến thể về từ vựng và cấu trúc trong Hán văn cổ.
+    \item \textbf{Thông tin ở cấp độ từ (word n-gram):} Chỉ số bổ sung tỷ lệ trùng khớp của các n-gram từ có độ dài từ 1 đến 2. Trong ngữ liệu Hán văn cổ đã được phân tách bằng khoảng trắng, mỗi Hán tự được xem như một từ độc lập; do đó, thành phần n-gram từ bậc hai thực chất tương ứng với bigram Hán tự.
+    \item \textbf{Precision, recall và F-score:} chrF++ sử dụng hệ số $\beta = 2$ để tính điểm $F_\beta$, tức là đặt trọng số cho recall cao hơn precision. Cách tính này nhấn mạnh khả năng bao phủ các đơn vị nội dung quan trọng trong bản dịch.
+    \item \textbf{Chữ ký cấu hình (signature):} Chữ ký của chrF++ trong thực nghiệm là \texttt{nrefs:1|case:mixed|eff:yes|nc:6|nw:2|space:no|version:2.6.0}.
+\end{itemize}
+
+\subsubsection{4.3.3 COMET (tùy chọn)}
+Chỉ số COMET (Crosslingual Optimized Metric for Evaluation of Translation) sử dụng mô hình ngôn ngữ đa ngữ, chẳng hạn như XLM-RoBERTa, để biểu diễn câu nguồn, bản dịch tham chiếu và bản dịch của mô hình trong một không gian vector chung, từ đó đánh giá chất lượng dịch ở cấp độ câu.
+\begin{itemize}
+    \item \textbf{Hạn chế khi áp dụng:} Mặc dù COMET thường có độ tương quan cao với đánh giá của con người đối với các ngôn ngữ hiện đại, một số checkpoint chủ yếu được huấn luyện trên dữ liệu thuộc các ngôn ngữ châu Âu. Vì khả năng bao phủ tiếng Việt và đặc biệt là Hán văn cổ có thể còn hạn chế, kết quả đánh giá ngữ nghĩa có nguy cơ thiếu chính xác hoặc kém nhạy. Do đó, COMET chỉ được xem là chỉ số tùy chọn và không được sử dụng làm thước đo chính trong các thực nghiệm của nghiên cứu này.
+\end{itemize}
+
+\subsection{Quy trình đánh giá}
+
+Quy trình đánh giá được tổ chức thành một pipeline tự động, khép kín nhằm bảo đảm tính toàn vẹn của kết quả và ngăn ngừa rò rỉ dữ liệu (data leakage):
+
+\begin{enumerate}
+    \item \textbf{Lựa chọn mô hình trên tập validation:}
+    Mô hình được huấn luyện trên tập train và đánh giá định kỳ trên tập validation. Tiêu chí lựa chọn checkpoint khác nhau giữa các backend:
+    \begin{itemize}
+        \item \textbf{Fairseq (E1/E3):} Checkpoint tối ưu được lựa chọn bằng cách tối đa hóa chỉ số BLEU trong quá trình huấn luyện; chỉ số này được tính bằng tùy chọn nội bộ \texttt{--eval-bleu}.
+        \item \textbf{Qwen3 QLoRA (E2):} Checkpoint tối ưu được lựa chọn bằng cách tối thiểu hóa giá trị hàm mất mát trên tập validation (\texttt{eval\_loss}).
+    \end{itemize}
+    
+    \item \textbf{Cổng đóng băng (freeze gate) bảo vệ tập test:}
+    Sau khi xác định checkpoint tốt nhất trên tập validation, hệ thống thực thi lệnh đóng băng thực nghiệm (\texttt{freeze-selection}). Lệnh này tạo tệp \texttt{selection\_frozen.json}, trong đó lưu mã băm SHA-256 của tệp cấu hình hệ thống, checkpoint mô hình và kết quả dịch trên tập validation. Quy trình giải mã và chấm điểm trên tập test chỉ được kích hoạt khi tệp đóng băng hợp lệ và các tham số mô hình cũng như tham số giải mã không bị thay đổi. Cơ chế này ngăn việc điều chỉnh các tham số giải mã, chẳng hạn như kích thước chùm (beam size) hoặc hệ số phạt (penalty), trực tiếp trên tập test nhằm tối ưu hóa điểm số.
+    
+    \item \textbf{Chấm điểm trên tập test:}
+    Quá trình suy luận trên tập test tạo ra bản dịch thô (\texttt{prediction\_raw}); bản dịch này sau đó được làm sạch và chuẩn hóa khoảng trắng để tạo thành \texttt{prediction\_scored}. Điểm BLEU và chrF++ được tính bằng thư viện SacreBLEU 2.6.0 thông qua việc đối sánh toàn bộ chuỗi \texttt{prediction\_scored} với bản dịch tham chiếu đã được phân tách bằng khoảng trắng (\texttt{score\_form\_chinese(reference)}).
+    
+    \item \textbf{Kiểm định thống kê bằng tái lấy mẫu bootstrap theo cặp:}
+    Để đánh giá độ tin cậy của mức cải thiện điểm số giữa các thí nghiệm (ví dụ: E2 so với E1 hoặc E3 so với E1), hệ thống thực hiện tái lấy mẫu bootstrap theo cặp (paired bootstrap resampling):
+    \begin{itemize}
+        \item Lặp lại quá trình lấy mẫu có hoàn lại $N = 1{,}000$ lần với một seed cố định (\texttt{seed = 42}) để bảo đảm khả năng tái lập.
+        \item Tính độ chênh lệch giữa các chỉ số ($\Delta$BLEU và $\Delta$chrF++) trên mỗi mẫu bootstrap.
+        \item Xác định khoảng tin cậy 95\% từ các phân vị 2,5\% và 97,5\% của phân phối độ chênh lệch, đồng thời tính giá trị $p$ hai phía để xác định liệu mức cải thiện có ý nghĩa thống kê hay không, với mức ý nghĩa $\alpha = 0{,}05$.
+    \end{itemize}
+\end{enumerate}
+
+
+
+
